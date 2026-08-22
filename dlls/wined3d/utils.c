@@ -719,7 +719,10 @@ static const struct
 }
 format_plane_info[] =
 {
-    {WINED3DFMT_NV12_PLANAR, {WINED3DFMT_R8_UINT, WINED3DFMT_R8G8_UINT}, 2, 2},
+    /* D3D11 plane views of NV12 use the UNORM variants (R8_UNORM for the luma
+     * plane, R8G8_UNORM for the chroma plane), which is also what Vulkan
+     * requires for a plane view of VK_FORMAT_G8_B8R8_2PLANE_420_UNORM. */
+    {WINED3DFMT_NV12_PLANAR, {WINED3DFMT_R8_UNORM, WINED3DFMT_R8G8_UNORM}, 2, 2},
 };
 
 struct wined3d_format_vertex_info
