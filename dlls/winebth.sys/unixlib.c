@@ -210,7 +210,7 @@ static NTSTATUS bluetooth_adapter_start_discovery( void *args )
     struct bluetooth_adapter_start_discovery_params *params = args;
 
     if (!dbus_connection) return STATUS_NOT_SUPPORTED;
-    return bluez_adapter_start_discovery( dbus_connection, params->adapter->str );
+    return bluez_adapter_start_discovery( dbus_connection, params->adapter->str, params->le );
 }
 
 static NTSTATUS bluetooth_adapter_stop_discovery( void *args )

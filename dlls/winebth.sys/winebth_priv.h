@@ -31,6 +31,7 @@
 #include <ddk/wdm.h>
 
 #include <wine/debug.h>
+#include <wine/winebth.h>
 
 #ifdef __ASM_USE_FASTCALL_WRAPPER
 extern void * WINAPI wrap_fastcall_func1(void *func, const void *a);
@@ -169,12 +170,24 @@ typedef UINT16 winebluetooth_device_props_mask_t;
 #define WINEBLUETOOTH_DEVICE_PROPERTY_LEGACY_PAIRING (1 << 4)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_TRUSTED        (1 << 5)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_CLASS          (1 << 6)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_RSSI              (1 << 7)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER          (1 << 8)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE      (1 << 9)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE        (1 << 10)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS             (1 << 11)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA (1 << 12)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA      (1 << 13)
+#define WINEBLUETOOTH_DEVICE_LE_PROPERTIES                                                      \
+    (WINEBLUETOOTH_DEVICE_PROPERTY_RSSI | WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER |              \
+     WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE | WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE |    \
+     WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS | WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA |    \
+     WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA)
 
 #define WINEBLUETOOTH_DEVICE_ALL_PROPERTIES                                                 \
     (WINEBLUETOOTH_DEVICE_PROPERTY_NAME | WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS |           \
      WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED | WINEBLUETOOTH_DEVICE_PROPERTY_PAIRED |       \
      WINEBLUETOOTH_DEVICE_PROPERTY_LEGACY_PAIRING | WINEBLUETOOTH_DEVICE_PROPERTY_TRUSTED | \
-     WINEBLUETOOTH_DEVICE_PROPERTY_CLASS)
+     WINEBLUETOOTH_DEVICE_PROPERTY_CLASS | WINEBLUETOOTH_DEVICE_LE_PROPERTIES)
 
 union winebluetooth_property
 {
@@ -206,6 +219,8 @@ struct winebluetooth_device_properties
     BOOL legacy_pairing;
     BOOL trusted;
     UINT32 class;
+    /* LE advertisement data. The address, name and flags fields are filled in by the driver. */
+    struct winebth_le_advertisement le;
 };
 
 typedef struct
@@ -229,7 +244,7 @@ static inline BOOL winebluetooth_radio_equal( winebluetooth_radio_t r1, wineblue
 NTSTATUS winebluetooth_radio_set_property( winebluetooth_radio_t radio,
                                            ULONG prop_flag,
                                            union winebluetooth_property *property );
-NTSTATUS winebluetooth_radio_start_discovery( winebluetooth_radio_t radio );
+NTSTATUS winebluetooth_radio_start_discovery( winebluetooth_radio_t radio, BOOL le );
 NTSTATUS winebluetooth_radio_stop_discovery( winebluetooth_radio_t radio );
 NTSTATUS winebluetooth_radio_remove_device( winebluetooth_radio_t radio, winebluetooth_device_t device );
 NTSTATUS winebluetooth_auth_agent_enable_incoming( void );

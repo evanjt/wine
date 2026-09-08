@@ -509,15 +509,15 @@ static NTSTATUS bluez_adapter_set_discovery_filter( void *connection, const char
 
 }
 
-NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path )
+NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path, BOOL le )
 {
     DBusMessage *request, *reply;
     DBusError error;
     NTSTATUS status;
 
-    TRACE( "(%p, %s)\n", connection, debugstr_a( adapter_path ) );
+    TRACE( "(%p, %s, %d)\n", connection, debugstr_a( adapter_path ), le );
 
-    status = bluez_adapter_set_discovery_filter( connection, adapter_path, "bredr" );
+    status = bluez_adapter_set_discovery_filter( connection, adapter_path, le ? "le" : "bredr" );
     if (status != STATUS_SUCCESS) return status;
 
     request = p_dbus_message_new_method_call( BLUEZ_DEST, adapter_path, BLUEZ_INTERFACE_ADAPTER,
@@ -791,6 +791,25 @@ static void bluez_radio_prop_from_dict_entry( const char *prop_name, DBusMessage
     }
 }
 
+/* Copy the contents of a DBus "ay" value, truncating to max_size. */
+static BOOL bluez_read_byte_array( DBusMessageIter *value, BYTE *buf, SIZE_T max_size, UINT16 *size )
+{
+    DBusMessageIter array;
+    const BYTE *bytes;
+    int len;
+
+    if (p_dbus_message_iter_get_arg_type( value ) != DBUS_TYPE_ARRAY ||
+        p_dbus_message_iter_get_element_type( value ) != DBUS_TYPE_BYTE)
+        return FALSE;
+    p_dbus_message_iter_recurse( value, &array );
+    p_dbus_message_iter_get_fixed_array( &array, &bytes, &len );
+    if (len < 0) return FALSE;
+    if (len > max_size) len = max_size;
+    memcpy( buf, bytes, len );
+    *size = len;
+    return TRUE;
+}
+
 static void bluez_device_prop_from_dict_entry( const char *prop_name, DBusMessageIter *variant,
                                                struct winebluetooth_device_properties *props,
                                                winebluetooth_device_props_mask_t *props_mask,
@@ -869,6 +888,112 @@ static void bluez_device_prop_from_dict_entry( const char *prop_name, DBusMessag
     {
         p_dbus_message_iter_get_basic( variant, &props->class );
         *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_CLASS;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI &&
+             !strcmp( prop_name, "RSSI" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_INT16)
+    {
+        p_dbus_message_iter_get_basic( variant, &props->le.rssi );
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_RSSI;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER &&
+             !strcmp( prop_name, "TxPower" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_INT16)
+    {
+        p_dbus_message_iter_get_basic( variant, &props->le.tx_power );
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE &&
+             !strcmp( prop_name, "Appearance" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_UINT16)
+    {
+        p_dbus_message_iter_get_basic( variant, &props->le.appearance );
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE &&
+             !strcmp( prop_name, "AddressType" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_STRING)
+    {
+        const char *type;
+        p_dbus_message_iter_get_basic( variant, &type );
+        if (!strcmp( type, "random" ))
+            props->le.flags |= WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS;
+        else
+            props->le.flags &= ~WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS;
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS &&
+             !strcmp( prop_name, "UUIDs" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_ARRAY)
+    {
+        DBusMessageIter uuids;
+
+        props->le.uuid_count = 0;
+        p_dbus_message_iter_recurse( variant, &uuids );
+        while (p_dbus_message_iter_get_arg_type( &uuids ) == DBUS_TYPE_STRING &&
+               props->le.uuid_count < WINEBTH_LE_ADV_MAX_UUIDS)
+        {
+            const char *uuid_str;
+            p_dbus_message_iter_get_basic( &uuids, &uuid_str );
+            if (parse_uuid( &props->le.uuids[props->le.uuid_count], uuid_str ))
+                props->le.uuid_count++;
+            p_dbus_message_iter_next( &uuids );
+        }
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA &&
+             !strcmp( prop_name, "ManufacturerData" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_ARRAY)
+    {
+        DBusMessageIter dict, entry, value;
+
+        props->le.manufacturer_data_count = 0;
+        p_dbus_message_iter_recurse( variant, &dict );
+        while (p_dbus_message_iter_get_arg_type( &dict ) == DBUS_TYPE_DICT_ENTRY &&
+               props->le.manufacturer_data_count < WINEBTH_LE_ADV_MAX_MANUFACTURER_DATA)
+        {
+            struct winebth_le_manufacturer_data *data = &props->le.manufacturer_data[props->le.manufacturer_data_count];
+
+            p_dbus_message_iter_recurse( &dict, &entry );
+            if (p_dbus_message_iter_get_arg_type( &entry ) == DBUS_TYPE_UINT16)
+            {
+                p_dbus_message_iter_get_basic( &entry, &data->company_id );
+                p_dbus_message_iter_next( &entry );
+                p_dbus_message_iter_recurse( &entry, &value );
+                if (bluez_read_byte_array( &value, data->data, sizeof( data->data ), &data->size ))
+                    props->le.manufacturer_data_count++;
+            }
+            p_dbus_message_iter_next( &dict );
+        }
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA &&
+             !strcmp( prop_name, "ServiceData" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_ARRAY)
+    {
+        DBusMessageIter dict, entry, value;
+
+        props->le.service_data_count = 0;
+        p_dbus_message_iter_recurse( variant, &dict );
+        while (p_dbus_message_iter_get_arg_type( &dict ) == DBUS_TYPE_DICT_ENTRY &&
+               props->le.service_data_count < WINEBTH_LE_ADV_MAX_SERVICE_DATA)
+        {
+            struct winebth_le_service_data *data = &props->le.service_data[props->le.service_data_count];
+            const char *uuid_str;
+
+            p_dbus_message_iter_recurse( &dict, &entry );
+            if (p_dbus_message_iter_get_arg_type( &entry ) == DBUS_TYPE_STRING)
+            {
+                p_dbus_message_iter_get_basic( &entry, &uuid_str );
+                p_dbus_message_iter_next( &entry );
+                p_dbus_message_iter_recurse( &entry, &value );
+                if (parse_uuid( &data->uuid, uuid_str ) &&
+                    bluez_read_byte_array( &value, data->data, sizeof( data->data ), &data->size ))
+                    props->le.service_data_count++;
+            }
+            p_dbus_message_iter_next( &dict );
+        }
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA;
     }
 }
 
@@ -2366,7 +2491,14 @@ static void bluez_signal_handler( DBusConnection *conn, DBusMessage *msg, const 
                 { "Paired", WINEBLUETOOTH_DEVICE_PROPERTY_PAIRED },
                 { "LegacyPairing", WINEBLUETOOTH_DEVICE_PROPERTY_LEGACY_PAIRING },
                 { "Trusted", WINEBLUETOOTH_DEVICE_PROPERTY_TRUSTED },
-                { "Class", WINEBLUETOOTH_DEVICE_PROPERTY_CLASS }
+                { "Class", WINEBLUETOOTH_DEVICE_PROPERTY_CLASS },
+                { "RSSI", WINEBLUETOOTH_DEVICE_PROPERTY_RSSI },
+                { "TxPower", WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER },
+                { "AddressType", WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE },
+                { "Appearance", WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE },
+                { "UUIDs", WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS },
+                { "ManufacturerData", WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA },
+                { "ServiceData", WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA }
             };
 
             p_dbus_message_iter_next( &iter );
@@ -2743,7 +2875,7 @@ NTSTATUS bluez_adapter_set_prop( void *connection, struct bluetooth_adapter_set_
 {
     return STATUS_NOT_SUPPORTED;
 }
-NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path )
+NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path, BOOL le )
 {
     return STATUS_NOT_SUPPORTED;
 }

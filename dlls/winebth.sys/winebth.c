@@ -422,6 +422,9 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
     return status;
 }
 
+static void bluetooth_device_fill_le_advertisement( struct bluetooth_remote_device *device,
+                                                    struct winebth_le_advertisement *adv );
+
 static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetooth_radio *ext, IRP *irp )
 {
     IO_STACK_LOCATION *stack = IoGetCurrentIrpStackLocation( irp );
@@ -587,8 +590,47 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
         break;
     }
     case IOCTL_WINEBTH_RADIO_START_DISCOVERY:
-        status = winebluetooth_radio_start_discovery( ext->radio );
+    {
+        const struct winebth_radio_start_discovery_params *params = irp->AssociatedIrp.SystemBuffer;
+        BOOL le = params && insize >= sizeof( *params ) && params->le;
+        status = winebluetooth_radio_start_discovery( ext->radio, le );
         break;
+    }
+    case IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS:
+    {
+        struct winebth_radio_get_le_advertisements_params *params = irp->AssociatedIrp.SystemBuffer;
+        struct bluetooth_remote_device *device;
+        SIZE_T capacity;
+
+        if (!params || outsize < sizeof( *params ))
+        {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            break;
+        }
+        capacity = (outsize - offsetof( struct winebth_radio_get_le_advertisements_params, advertisements ))
+                   / sizeof( params->advertisements[0] );
+        params->count = 0;
+        status = STATUS_SUCCESS;
+        EnterCriticalSection( &device_list_cs );
+        LIST_FOR_EACH_ENTRY( device, &ext->remote_devices, struct bluetooth_remote_device, entry )
+        {
+            EnterCriticalSection( &device->props_cs );
+            /* BlueZ only reports an RSSI for devices it has recently heard from. */
+            if (device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+            {
+                if (params->count < capacity)
+                    bluetooth_device_fill_le_advertisement( device, &params->advertisements[params->count] );
+                else
+                    status = STATUS_BUFFER_OVERFLOW;
+                params->count++;
+            }
+            LeaveCriticalSection( &device->props_cs );
+        }
+        LeaveCriticalSection( &device_list_cs );
+        irp->IoStatus.Information = offsetof( struct winebth_radio_get_le_advertisements_params,
+                                              advertisements[min( params->count, capacity )] );
+        break;
+    }
     case IOCTL_WINEBTH_RADIO_STOP_DISCOVERY:
         status = winebluetooth_radio_stop_discovery( ext->radio );
         break;
@@ -998,6 +1040,58 @@ static void bluetooth_radio_report_radio_in_range_event( DEVICE_OBJECT *radio_ob
     ExFreePool( notification );
 }
 
+/* Caller must hold device->props_cs. */
+static void bluetooth_device_fill_le_advertisement( struct bluetooth_remote_device *device,
+                                                    struct winebth_le_advertisement *adv )
+{
+    *adv = device->props.le;
+    adv->address = RtlUlonglongByteSwap( device->props.address.ullLong ) >> 16;
+    adv->flags &= WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS;
+    if (device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+        adv->flags |= WINEBTH_LE_ADV_FLAG_RSSI;
+    if (device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER)
+        adv->flags |= WINEBTH_LE_ADV_FLAG_TX_POWER;
+    if (device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE)
+        adv->flags |= WINEBTH_LE_ADV_FLAG_APPEARANCE;
+    if (device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_NAME)
+    {
+        adv->flags |= WINEBTH_LE_ADV_FLAG_NAME;
+        memcpy( adv->name, device->props.name, sizeof( adv->name ) );
+    }
+    else
+        adv->name[0] = '\0';
+    if (!(device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS))
+        adv->uuid_count = 0;
+    if (!(device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA))
+        adv->manufacturer_data_count = 0;
+    if (!(device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA))
+        adv->service_data_count = 0;
+}
+
+static void bluetooth_radio_report_le_advertisement( DEVICE_OBJECT *radio_obj, const struct winebth_le_advertisement *adv )
+{
+    TARGET_DEVICE_CUSTOM_NOTIFICATION *notification;
+    SIZE_T notif_size;
+    NTSTATUS ret;
+
+    notif_size = offsetof( TARGET_DEVICE_CUSTOM_NOTIFICATION, CustomDataBuffer[sizeof( *adv )] );
+    notification = ExAllocatePool( PagedPool, notif_size );
+    if (!notification)
+        return;
+
+    notification->Version = 1;
+    notification->Size = notif_size;
+    notification->Event = GUID_WINEBTH_LE_ADVERTISEMENT;
+    notification->FileObject = NULL;
+    notification->NameBufferOffset = -1;
+    memcpy( notification->CustomDataBuffer, adv, sizeof( *adv ) );
+
+    ret = IoReportTargetDeviceChange( radio_obj, notification );
+    if (ret)
+        ERR( "IoReportTargetDeviceChange failed: %#lx\n", ret );
+    ExFreePool( notification );
+}
+
 static void bluetooth_radio_add_remote_device( struct winebluetooth_watcher_event_device_added event )
 {
     struct bluetooth_radio *radio;
@@ -1052,6 +1146,12 @@ static void bluetooth_radio_add_remote_device( struct winebluetooth_watcher_even
                 BTH_DEVICE_INFO device_info = {0};
                 winebluetooth_device_properties_to_info( ext->remote_device.props_mask, &ext->remote_device.props, &device_info );
                 bluetooth_radio_report_radio_in_range_event( radio->device_obj, 0, &device_info );
+                if (ext->remote_device.props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+                {
+                    struct winebth_le_advertisement adv;
+                    bluetooth_device_fill_le_advertisement( &ext->remote_device, &adv );
+                    bluetooth_radio_report_le_advertisement( radio->device_obj, &adv );
+                }
             }
 
             list_add_tail( &radio->remote_devices, &ext->remote_device.entry );
@@ -1181,6 +1281,8 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
 {
     BTH_DEVICE_INFO device_new_info = {0};
     DEVICE_OBJECT *radio_obj = NULL; /* The radio PDO the remote device exists on. */
+    struct winebth_le_advertisement adv;
+    BOOL report_adv = FALSE;
     struct bluetooth_radio *radio;
     ULONG device_old_flags = 0;
 
@@ -1218,8 +1320,40 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                     device->props.trusted = event.props.trusted;
                 if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_CLASS)
                     device->props.class = event.props.class;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+                    device->props.le.rssi = event.props.le.rssi;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER)
+                    device->props.le.tx_power = event.props.le.tx_power;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE)
+                    device->props.le.appearance = event.props.le.appearance;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE)
+                    device->props.le.flags = event.props.le.flags & WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS)
+                {
+                    device->props.le.uuid_count = event.props.le.uuid_count;
+                    memcpy( device->props.le.uuids, event.props.le.uuids, sizeof( device->props.le.uuids ) );
+                }
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA)
+                {
+                    device->props.le.manufacturer_data_count = event.props.le.manufacturer_data_count;
+                    memcpy( device->props.le.manufacturer_data, event.props.le.manufacturer_data,
+                            sizeof( device->props.le.manufacturer_data ) );
+                }
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA)
+                {
+                    device->props.le.service_data_count = event.props.le.service_data_count;
+                    memcpy( device->props.le.service_data, event.props.le.service_data,
+                            sizeof( device->props.le.service_data ) );
+                }
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &device_new_info );
                 bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, device->props_mask );
+                /* Any change to advertisement data while the device is in range counts as a new advertisement. */
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_LE_PROPERTIES &&
+                    device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+                {
+                    bluetooth_device_fill_le_advertisement( device, &adv );
+                    report_adv = TRUE;
+                }
                 LeaveCriticalSection( &device->props_cs );
 
                 device_old_flags = old_info.flags;
@@ -1231,7 +1365,11 @@ done:
     winebluetooth_device_free( event.device );
 
     if (radio_obj)
+    {
         bluetooth_radio_report_radio_in_range_event( radio_obj, device_old_flags, &device_new_info );
+        if (report_adv)
+            bluetooth_radio_report_le_advertisement( radio_obj, &adv );
+    }
 
     LeaveCriticalSection( &device_list_cs );
 }
