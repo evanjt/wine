@@ -61,6 +61,10 @@ extern NTSTATUS bluez_auth_agent_send_response( void *auth_agent, struct unix_na
 extern NTSTATUS bluez_device_disconnect( void *connection, const char *device_path );
 extern NTSTATUS bluez_device_start_pairing( void *dbus_connection, void *watcher_ctx, struct unix_name *device, IRP *irp );
 extern NTSTATUS bluez_device_connect( void *dbus_connection, void *watcher_ctx, struct unix_name *device, IRP *irp );
+extern NTSTATUS bluez_gatt_characteristic_write( void *dbus_connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                                 const BYTE *data, ULONG size, BOOL without_response );
+extern NTSTATUS bluez_gatt_characteristic_set_notify( void *dbus_connection, void *watcher_ctx, struct unix_name *chrc,
+                                                      IRP *irp, BOOL enable );
 extern NTSTATUS bluez_watcher_init( void *connection, void **ctx );
 extern void bluez_gatt_characteristic_value_move( struct winebluetooth_gatt_characteristic_value *value, BYTE *buf );
 extern void bluez_gatt_characteristic_value_free( void *val );

@@ -35,7 +35,11 @@
 
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
+#define WIDL_using_Windows_Storage_Streams
+#define WIDL_using_Windows_Devices_Enumeration
 #include "windows.foundation.h"
+#include "windows.storage.streams.h"
+#include "windows.devices.enumeration.h"
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
 #include "windows.networking.h"
@@ -68,7 +72,22 @@ struct vector_iids
 };
 HRESULT vector_create( const struct vector_iids *iids, void **out );
 
-HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
+HRESULT async_operation_uint32_create( const GUID *iid, IUnknown *invoker, IUnknown *param,
+                                       async_operation_callback callback, IAsyncOperation_IInspectable **out );
+
+HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out );
+HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
+HRESULT class_name_string( const WCHAR *name, HSTRING *out );
+
+HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, HANDLE device, UINT64 addr, IBluetoothLEDevice *ble_device,
+                             IGattDeviceService **service );
+HRESULT gatt_session_create( IBluetoothDeviceId *id, IGattSession **session );
+HRESULT bluetoothdeviceid_create( HSTRING id, IBluetoothDeviceId **out );
+HRESULT gatt_device_services_result_create( IVector_IInspectable *services, IGattDeviceServicesResult **out );
+HRESULT ble_device_get_services_vector( IBluetoothLEDevice *device, const GUID *uuid, IVector_IInspectable **vector );
+
+extern IActivationFactory *gattsession_statics_factory;
+extern IActivationFactory *bluetoothdeviceid_statics_factory;
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \
     static inline impl_type *impl_from( iface_type *iface )                                        \

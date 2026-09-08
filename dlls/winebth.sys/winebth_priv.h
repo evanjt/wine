@@ -290,6 +290,10 @@ struct winebluetooth_gatt_characteristic_value
 void winebluetooth_gatt_characteristic_value_move( struct winebluetooth_gatt_characteristic_value *val, BYTE *dest );
 void winebluetooth_gatt_characteristic_value_free( struct winebluetooth_gatt_characteristic_value *val );
 NTSTATUS winebluetooth_gatt_characteristic_read_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp );
+NTSTATUS winebluetooth_gatt_characteristic_write_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp,
+                                                        const BYTE *data, ULONG size, BOOL without_response );
+NTSTATUS winebluetooth_gatt_characteristic_set_notify_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp,
+                                                             BOOL enable );
 
 enum winebluetooth_watcher_event_type
 {
@@ -308,6 +312,7 @@ enum winebluetooth_watcher_event_type
     BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_REMOVED,
     BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_VALUE_CHANGED,
     BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_VALUE_READ,
+    BLUETOOTH_WATCHER_EVENT_TYPE_GATT_OPERATION_FINISHED,
 };
 
 struct winebluetooth_watcher_event_radio_added
@@ -402,6 +407,12 @@ struct winebluetooth_watcher_event_gatt_characteristic_value_read
     NTSTATUS result;
 };
 
+struct winebluetooth_watcher_event_gatt_operation_finished
+{
+    IRP *irp;
+    NTSTATUS result;
+};
+
 union winebluetooth_watcher_event_data
 {
     struct winebluetooth_watcher_event_radio_added radio_added;
@@ -418,6 +429,7 @@ union winebluetooth_watcher_event_data
     winebluetooth_gatt_characteristic_t gatt_characterisic_removed;
     struct winebluetooth_watcher_event_gatt_characteristic_value_changed gatt_characteristic_value_changed;
     struct winebluetooth_watcher_event_gatt_characteristic_value_read gatt_characteristic_value_read;
+    struct winebluetooth_watcher_event_gatt_operation_finished gatt_operation_finished;
 };
 
 struct winebluetooth_watcher_event

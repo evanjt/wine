@@ -18,9 +18,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define WIDL_using_Windows_Storage_Streams
 #include "private.h"
-#include "windows.storage.streams.h"
 #include "initguid.h"
 #include "robuffer.h"
 #include "roapi.h"
@@ -34,7 +32,7 @@ WINE_DEFAULT_DEBUG_CHANNEL( bluetooth );
 
 /* --- Helpers --- */
 
-static HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
+HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
 {
     static const WCHAR class_name[] = L"Windows.Storage.Streams.Buffer";
     IBufferByteAccess *access;
@@ -72,9 +70,21 @@ static HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
     return hr;
 }
 
-static HRESULT class_name_string( const WCHAR *name, HSTRING *out )
+HRESULT class_name_string( const WCHAR *name, HSTRING *out )
 {
     return WindowsCreateString( name, wcslen( name ), out );
+}
+
+HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size )
+{
+    IBufferByteAccess *access;
+    HRESULT hr;
+
+    if (FAILED((hr = IBuffer_get_Length( buffer, size )))) return hr;
+    if (FAILED((hr = IBuffer_QueryInterface( buffer, &IID_IBufferByteAccess, (void **)&access )))) return hr;
+    hr = IBufferByteAccess_Buffer( access, data );
+    IBufferByteAccess_Release( access );
+    return hr;
 }
 
 /* A UUID in the Bluetooth base range that fits in 16 or 32 bits. */

@@ -290,6 +290,24 @@ static NTSTATUS bluetooth_gatt_characteristic_read( void *args )
     return bluez_gatt_characteristic_read( dbus_connection, bluetooth_watcher, params->chrc, params->irp );
 }
 
+static NTSTATUS bluetooth_gatt_characteristic_write( void *args )
+{
+    struct bluetooth_gatt_characteristic_write_params *params = args;
+
+    if (!dbus_connection) return STATUS_NOT_SUPPORTED;
+    return bluez_gatt_characteristic_write( dbus_connection, bluetooth_watcher, params->chrc, params->irp, params->data,
+                                            params->size, params->without_response );
+}
+
+static NTSTATUS bluetooth_gatt_characteristic_set_notify( void *args )
+{
+    struct bluetooth_gatt_characteristic_set_notify_params *params = args;
+
+    if (!dbus_connection) return STATUS_NOT_SUPPORTED;
+    return bluez_gatt_characteristic_set_notify( dbus_connection, bluetooth_watcher, params->chrc, params->irp,
+                                                 params->enable );
+}
+
 static NTSTATUS bluetooth_gatt_characteristic_value_move( void *args )
 {
     struct bluetooth_gatt_characteristic_value_move_params *params = args;
@@ -340,6 +358,8 @@ const unixlib_entry_t __wine_unix_call_funcs[] = {
 
     bluetooth_gatt_characteristic_free,
     bluetooth_gatt_characteristic_read,
+    bluetooth_gatt_characteristic_write,
+    bluetooth_gatt_characteristic_set_notify,
 
     bluetooth_gatt_characteristic_value_move,
     bluetooth_gatt_characteristic_value_free,

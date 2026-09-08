@@ -155,6 +155,22 @@ struct bluetooth_gatt_characteristic_read_params
     IRP *irp;
 };
 
+struct bluetooth_gatt_characteristic_write_params
+{
+    unix_name_t chrc;
+    IRP *irp;
+    const BYTE *data;
+    ULONG size;
+    BOOL without_response;
+};
+
+struct bluetooth_gatt_characteristic_set_notify_params
+{
+    unix_name_t chrc;
+    IRP *irp;
+    BOOL enable;
+};
+
 struct bluetooth_get_event_params
 {
     struct winebluetooth_event result;
@@ -186,6 +202,8 @@ enum bluetoothapis_funcs
 
     unix_bluetooth_gatt_characteristic_free,
     unix_bluetooth_gatt_characteristic_read,
+    unix_bluetooth_gatt_characteristic_write,
+    unix_bluetooth_gatt_characteristic_set_notify,
 
     unix_bluetooth_gatt_characteristic_value_move,
     unix_bluetooth_gatt_characteristic_value_free,

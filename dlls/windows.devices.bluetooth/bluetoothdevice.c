@@ -20,6 +20,8 @@
 #include "private.h"
 #include "roapi.h"
 #include "setupapi.h"
+#include "cfgmgr32.h"
+#include "bthdef.h"
 #include "initguid.h"
 #include "devpkey.h"
 #include "bthledef.h"
@@ -166,11 +168,100 @@ static const IBluetoothDeviceStaticsVtbl bluetoothdevice_statics_vtbl =
 struct ble_device
 {
     IBluetoothLEDevice IBluetoothLEDevice_iface;
+    IBluetoothLEDevice2 IBluetoothLEDevice2_iface;
+    IBluetoothLEDevice3 IBluetoothLEDevice3_iface;
+    IBluetoothLEDevice4 IBluetoothLEDevice4_iface;
+    IBluetoothLEDevice5 IBluetoothLEDevice5_iface;
+    IClosable IClosable_iface;
     HSTRING id;
     UINT64 addr;
     HANDLE device;
     LONG ref;
+
+    CRITICAL_SECTION cs;
+    HANDLE radio; /* Guarded by cs */
+    HCMNOTIFICATION notification; /* Guarded by cs */
+    struct
+    {
+        ITypedEventHandler_BluetoothLEDevice_IInspectable *handler;
+        INT64 token;
+    } *status_handlers; /* Guarded by cs */
+    UINT32 status_handler_count;
+    INT64 next_token;
 };
+
+/* Caller must hold impl->cs. */
+static HANDLE ble_device_get_radio( struct ble_device *impl )
+{
+    BLUETOOTH_FIND_RADIO_PARAMS params = { .dwSize = sizeof( params ) };
+    HBLUETOOTH_RADIO_FIND find;
+
+    if (impl->radio) return impl->radio;
+    if (!(find = BluetoothFindFirstRadio( &params, &impl->radio ))) return NULL;
+    BluetoothFindRadioClose( find );
+    return impl->radio;
+}
+
+static BOOL ble_device_is_connected( struct ble_device *impl )
+{
+    BLUETOOTH_DEVICE_INFO info = { .dwSize = sizeof( info ) };
+    HANDLE radio;
+    DWORD ret;
+
+    EnterCriticalSection( &impl->cs );
+    radio = ble_device_get_radio( impl );
+    LeaveCriticalSection( &impl->cs );
+    if (!radio) return FALSE;
+    info.Address.ullLong = impl->addr;
+    if ((ret = BluetoothGetDeviceInfo( radio, &info )))
+    {
+        WARN( "BluetoothGetDeviceInfo failed: %lu\n", ret );
+        return FALSE;
+    }
+    return info.fConnected;
+}
+
+static void ble_device_dispatch_status_changed( struct ble_device *impl )
+{
+    ITypedEventHandler_BluetoothLEDevice_IInspectable **handlers;
+    UINT32 i, count;
+
+    EnterCriticalSection( &impl->cs );
+    count = impl->status_handler_count;
+    if (!count || !(handlers = malloc( count * sizeof( *handlers ) )))
+    {
+        LeaveCriticalSection( &impl->cs );
+        return;
+    }
+    for (i = 0; i < count; i++)
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_AddRef(( handlers[i] = impl->status_handlers[i].handler ));
+    LeaveCriticalSection( &impl->cs );
+
+    for (i = 0; i < count; i++)
+    {
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_Invoke( handlers[i], &impl->IBluetoothLEDevice_iface, NULL );
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( handlers[i] );
+    }
+    free( handlers );
+}
+
+static DWORD CALLBACK ble_device_notify_callback( HCMNOTIFICATION notify, void *ctx, CM_NOTIFY_ACTION action,
+                                                  CM_NOTIFY_EVENT_DATA *event_data, DWORD size )
+{
+    struct ble_device *impl = ctx;
+    const BTH_RADIO_IN_RANGE *in_range;
+
+    if (action != CM_NOTIFY_ACTION_DEVICECUSTOMEVENT) return ERROR_SUCCESS;
+    if (!IsEqualGUID( &event_data->u.DeviceHandle.EventGuid, &GUID_BLUETOOTH_RADIO_IN_RANGE )) return ERROR_SUCCESS;
+    if (event_data->u.DeviceHandle.DataSize < sizeof( *in_range )) return ERROR_SUCCESS;
+    in_range = (const BTH_RADIO_IN_RANGE *)event_data->u.DeviceHandle.Data;
+    if (in_range->deviceInfo.address != impl->addr) return ERROR_SUCCESS;
+    if (!((in_range->deviceInfo.flags ^ in_range->previousDeviceFlags) & BDIF_CONNECTED)) return ERROR_SUCCESS;
+
+    TRACE( "device %p connected %d\n", impl, !!(in_range->deviceInfo.flags & BDIF_CONNECTED) );
+    ble_device_dispatch_status_changed( impl );
+    return ERROR_SUCCESS;
+}
 
 static inline struct ble_device *impl_from_IBluetoothLEDevice( IBluetoothLEDevice *iface )
 {
@@ -191,6 +282,36 @@ static HRESULT WINAPI ble_device_QueryInterface( IBluetoothLEDevice *iface, REFI
         IBluetoothLEDevice_AddRef( (*out = &impl->IBluetoothLEDevice_iface) );
         return S_OK;
     }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice2 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice2_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice3 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice3_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice4 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice4_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice5 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice5_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IClosable ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IClosable_iface;
+        return S_OK;
+    }
 
     *out = NULL;
     FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
@@ -208,12 +329,20 @@ static ULONG WINAPI ble_device_Release( IBluetoothLEDevice *iface )
 {
     struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
     ULONG ref = InterlockedDecrement( &impl->ref );
+    UINT32 i;
+
     TRACE( "(%p)\n", iface );
 
     if (!ref)
     {
-        WindowsDeleteString( impl->id );
+        if (impl->notification) CM_Unregister_Notification( impl->notification );
+        for (i = 0; i < impl->status_handler_count; i++)
+            ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( impl->status_handlers[i].handler );
+        free( impl->status_handlers );
+        if (impl->radio) CloseHandle( impl->radio );
         CloseHandle( impl->device );
+        WindowsDeleteString( impl->id );
+        DeleteCriticalSection( &impl->cs );
         free( impl );
     }
     return ref;
@@ -246,11 +375,22 @@ static HRESULT WINAPI ble_device_get_DeviceId( IBluetoothLEDevice *iface, HSTRIN
 
 static HRESULT WINAPI ble_device_get_Name( IBluetoothLEDevice *iface, HSTRING *value )
 {
-    FIXME( "(%p, %p): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    BLUETOOTH_DEVICE_INFO info = { .dwSize = sizeof( info ) };
+    HANDLE radio;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
+    EnterCriticalSection( &impl->cs );
+    radio = ble_device_get_radio( impl );
+    LeaveCriticalSection( &impl->cs );
+    info.Address.ullLong = impl->addr;
+    if (!radio || BluetoothGetDeviceInfo( radio, &info ))
+        return WindowsCreateString( NULL, 0, value );
+    return WindowsCreateString( info.szName, wcslen( info.szName ), value );
 }
 
-static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IVectorView_GattDeviceService **services )
+HRESULT ble_device_get_services_vector( IBluetoothLEDevice *device, const GUID *uuid, IVector_IInspectable **out )
 {
     static const struct vector_iids iids = {
         .vector = &IID_IVector_IInspectable,
@@ -258,19 +398,17 @@ static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IV
         .iterable = &IID_IIterable_GattDeviceService,
         .iterator = &IID_IIterator_GattDeviceService,
     };
-    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( device );
     BTH_LE_GATT_SERVICE *buf = NULL;
     IVector_IInspectable *vector;
     USHORT actual = 0, i;
     HRESULT hr;
 
-    TRACE( "(%p, %p)\n", iface, services );
-
-    *services = NULL;
+    *out = NULL;
     if (FAILED(hr = vector_create( &iids, (void **)&vector ))) return hr;
+
     hr = BluetoothGATTGetServices( impl->device, 0, NULL, &actual, 0 );
     if (SUCCEEDED( hr ) || hr != HRESULT_FROM_WIN32( ERROR_MORE_DATA )) goto done;
-
     for (;;)
     {
         UINT32 size = actual;
@@ -288,8 +426,20 @@ static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IV
     for (i = 0; i < actual; i++)
     {
         IGattDeviceService *service;
+        GUID svc_uuid;
 
-        if (FAILED(hr = gatt_service_create( &buf[i], &service ))) goto done;
+        if (uuid)
+        {
+            if (buf[i].ServiceUuid.IsShortUuid)
+            {
+                svc_uuid = BTH_LE_ATT_BLUETOOTH_BASE_GUID;
+                svc_uuid.Data1 = buf[i].ServiceUuid.Value.ShortUuid;
+            }
+            else
+                svc_uuid = buf[i].ServiceUuid.Value.LongUuid;
+            if (!IsEqualGUID( uuid, &svc_uuid )) continue;
+        }
+        if (FAILED(hr = gatt_service_create( &buf[i], impl->device, impl->addr, device, &service ))) goto done;
         hr = IVector_IInspectable_Append( vector, (IInspectable *)service );
         IGattDeviceService_Release( service );
         if (FAILED( hr )) goto done;
@@ -298,9 +448,23 @@ done:
     free( buf );
     if (FAILED( hr ))
     {
+        WARN( "Failed to enumerate services: %#lx\n", hr );
         IVector_IInspectable_Release( vector );
         return hr;
     }
+    *out = vector;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IVectorView_GattDeviceService **services )
+{
+    IVector_IInspectable *vector;
+    HRESULT hr;
+
+    TRACE( "(%p, %p)\n", iface, services );
+
+    *services = NULL;
+    if (FAILED(hr = ble_device_get_services_vector( iface, NULL, &vector ))) return hr;
     hr = IVector_IInspectable_GetView( vector, (IVectorView_IInspectable **)services );
     IVector_IInspectable_Release( vector );
     return hr;
@@ -308,8 +472,10 @@ done:
 
 static HRESULT WINAPI ble_device_get_ConnectionStatus( IBluetoothLEDevice *iface, BluetoothConnectionStatus *value )
 {
-    FIXME( "(%p, %p): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = ble_device_is_connected( impl ) ? BluetoothConnectionStatus_Connected : BluetoothConnectionStatus_Disconnected;
+    return S_OK;
 }
 
 static HRESULT WINAPI ble_device_get_BluetoothAddress( IBluetoothLEDevice *iface, UINT64 *value )
@@ -355,14 +521,56 @@ static HRESULT WINAPI ble_device_remove_GattServicesChanged( IBluetoothLEDevice 
 static HRESULT WINAPI ble_device_add_ConnectionStatusChanged( IBluetoothLEDevice *iface, ITypedEventHandler_BluetoothLEDevice_IInspectable *handler,
                                                               EventRegistrationToken *token )
 {
-    FIXME( "(%p, %p, %p): stub!\n", iface, handler, token );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    CM_NOTIFY_FILTER filter = { .cbSize = sizeof( filter ), .FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE };
+    void *tmp;
+
+    TRACE( "(%p, %p, %p)\n", iface, handler, token );
+
+    if (!handler) return E_INVALIDARG;
+    EnterCriticalSection( &impl->cs );
+    if (!(tmp = realloc( impl->status_handlers, (impl->status_handler_count + 1) * sizeof( *impl->status_handlers ) )))
+    {
+        LeaveCriticalSection( &impl->cs );
+        return E_OUTOFMEMORY;
+    }
+    impl->status_handlers = tmp;
+    ITypedEventHandler_BluetoothLEDevice_IInspectable_AddRef( handler );
+    impl->status_handlers[impl->status_handler_count].handler = handler;
+    impl->status_handlers[impl->status_handler_count].token = token->value = ++impl->next_token;
+    impl->status_handler_count++;
+    if (!impl->notification && ble_device_get_radio( impl ))
+    {
+        CONFIGRET ret;
+        filter.u.DeviceHandle.hTarget = impl->radio;
+        if ((ret = CM_Register_Notification( &filter, impl, ble_device_notify_callback, &impl->notification )))
+            ERR( "CM_Register_Notification failed: %#lx\n", ret );
+    }
+    LeaveCriticalSection( &impl->cs );
+    return S_OK;
 }
 
 static HRESULT WINAPI ble_device_remove_ConnectionStatusChanged( IBluetoothLEDevice *iface, EventRegistrationToken token )
 {
-    FIXME( "(%p, %I64d): stub!\n", iface, token.value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    ITypedEventHandler_BluetoothLEDevice_IInspectable *handler = NULL;
+    UINT32 i;
+
+    TRACE( "(%p, %I64x)\n", iface, token.value );
+
+    EnterCriticalSection( &impl->cs );
+    for (i = 0; i < impl->status_handler_count; i++)
+    {
+        if (impl->status_handlers[i].token != token.value) continue;
+        handler = impl->status_handlers[i].handler;
+        memmove( &impl->status_handlers[i], &impl->status_handlers[i + 1],
+                 (impl->status_handler_count - i - 1) * sizeof( *impl->status_handlers ) );
+        impl->status_handler_count--;
+        break;
+    }
+    LeaveCriticalSection( &impl->cs );
+    if (handler) ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( handler );
+    return S_OK;
 }
 
 static const IBluetoothLEDeviceVtbl ble_device_vtbl = {
@@ -389,6 +597,381 @@ static const IBluetoothLEDeviceVtbl ble_device_vtbl = {
     ble_device_remove_ConnectionStatusChanged,
 };
 
+DEFINE_IINSPECTABLE_( ble_device_closable, IClosable, struct ble_device, ble_device_from_IClosable, IClosable_iface,
+                      &impl->IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device_closable_Close( IClosable *iface )
+{
+    TRACE( "(%p)\n", iface );
+    return S_OK;
+}
+
+static const IClosableVtbl ble_device_closable_vtbl =
+{
+    ble_device_closable_QueryInterface,
+    ble_device_closable_AddRef,
+    ble_device_closable_Release,
+    ble_device_closable_GetIids,
+    ble_device_closable_GetRuntimeClassName,
+    ble_device_closable_GetTrustLevel,
+    ble_device_closable_Close,
+};
+
+DEFINE_IINSPECTABLE( ble_device2, IBluetoothLEDevice2, struct ble_device, IBluetoothLEDevice_iface )
+
+/* Minimal DeviceInformation for the LE device, since windows.devices.enumeration cannot create one from an id yet. */
+struct device_information
+{
+    IDeviceInformation IDeviceInformation_iface;
+    LONG ref;
+    HSTRING id;
+    HSTRING name;
+};
+
+static inline struct device_information *impl_from_IDeviceInformation( IDeviceInformation *iface )
+{
+    return CONTAINING_RECORD( iface, struct device_information, IDeviceInformation_iface );
+}
+
+static HRESULT WINAPI device_information_QueryInterface( IDeviceInformation *iface, REFIID iid, void **out )
+{
+    struct device_information *impl = impl_from_IDeviceInformation( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IDeviceInformation ))
+    {
+        IDeviceInformation_AddRef(( *out = &impl->IDeviceInformation_iface ));
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI device_information_AddRef( IDeviceInformation *iface )
+{
+    struct device_information *impl = impl_from_IDeviceInformation( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI device_information_Release( IDeviceInformation *iface )
+{
+    struct device_information *impl = impl_from_IDeviceInformation( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+    if (!ref)
+    {
+        WindowsDeleteString( impl->id );
+        WindowsDeleteString( impl->name );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT WINAPI device_information_GetIids( IDeviceInformation *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI device_information_GetRuntimeClassName( IDeviceInformation *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Enumeration.DeviceInformation", class_name );
+}
+
+static HRESULT WINAPI device_information_GetTrustLevel( IDeviceInformation *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_information_get_Id( IDeviceInformation *iface, HSTRING *value )
+{
+    struct device_information *impl = impl_from_IDeviceInformation( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    return WindowsDuplicateString( impl->id, value );
+}
+
+static HRESULT WINAPI device_information_get_Name( IDeviceInformation *iface, HSTRING *value )
+{
+    struct device_information *impl = impl_from_IDeviceInformation( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    return WindowsDuplicateString( impl->name, value );
+}
+
+static HRESULT WINAPI device_information_get_IsEnabled( IDeviceInformation *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = TRUE;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_information_get_IsDefault( IDeviceInformation *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_information_get_EnclosureLocation( IDeviceInformation *iface, IEnclosureLocation **value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = NULL;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_information_get_Properties( IDeviceInformation *iface, IMapView_HSTRING_IInspectable **value )
+{
+    FIXME( "(%p, %p): stub!\n", iface, value );
+    *value = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI device_information_Update( IDeviceInformation *iface, IDeviceInformationUpdate *update )
+{
+    FIXME( "(%p, %p): stub!\n", iface, update );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI device_information_GetThumbnailAsync( IDeviceInformation *iface, IAsyncOperation_DeviceThumbnail **op )
+{
+    FIXME( "(%p, %p): stub!\n", iface, op );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI device_information_GetGlyphThumbnailAsync( IDeviceInformation *iface, IAsyncOperation_DeviceThumbnail **op )
+{
+    FIXME( "(%p, %p): stub!\n", iface, op );
+    return E_NOTIMPL;
+}
+
+static const IDeviceInformationVtbl device_information_vtbl =
+{
+    device_information_QueryInterface,
+    device_information_AddRef,
+    device_information_Release,
+    device_information_GetIids,
+    device_information_GetRuntimeClassName,
+    device_information_GetTrustLevel,
+    device_information_get_Id,
+    device_information_get_Name,
+    device_information_get_IsEnabled,
+    device_information_get_IsDefault,
+    device_information_get_EnclosureLocation,
+    device_information_get_Properties,
+    device_information_Update,
+    device_information_GetThumbnailAsync,
+    device_information_GetGlyphThumbnailAsync,
+};
+
+static HRESULT WINAPI ble_device2_get_DeviceInformation( IBluetoothLEDevice2 *iface, IDeviceInformation **value )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice2( iface );
+    struct device_information *info;
+    HRESULT hr;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
+    if (!(info = calloc( 1, sizeof( *info ) ))) return E_OUTOFMEMORY;
+    info->IDeviceInformation_iface.lpVtbl = &device_information_vtbl;
+    info->ref = 1;
+    if (FAILED((hr = WindowsDuplicateString( impl->id, &info->id ))) ||
+        FAILED((hr = IBluetoothLEDevice_get_Name( &impl->IBluetoothLEDevice_iface, &info->name ))))
+    {
+        IDeviceInformation_Release( &info->IDeviceInformation_iface );
+        return hr;
+    }
+    *value = &info->IDeviceInformation_iface;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device2_get_Appearance( IBluetoothLEDevice2 *iface, IBluetoothLEAppearance **value )
+{
+    FIXME( "(%p, %p): semi-stub!\n", iface, value );
+    *value = NULL;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device2_get_BluetoothAddressType( IBluetoothLEDevice2 *iface, BluetoothAddressType *value )
+{
+    FIXME( "(%p, %p): semi-stub!\n", iface, value );
+    *value = BluetoothAddressType_Public;
+    return S_OK;
+}
+
+static const IBluetoothLEDevice2Vtbl ble_device2_vtbl =
+{
+    ble_device2_QueryInterface,
+    ble_device2_AddRef,
+    ble_device2_Release,
+    ble_device2_GetIids,
+    ble_device2_GetRuntimeClassName,
+    ble_device2_GetTrustLevel,
+    ble_device2_get_DeviceInformation,
+    ble_device2_get_Appearance,
+    ble_device2_get_BluetoothAddressType,
+};
+
+DEFINE_IINSPECTABLE( ble_device3, IBluetoothLEDevice3, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device3_get_DeviceAccessInformation( IBluetoothLEDevice3 *iface, IDeviceAccessInformation **value )
+{
+    FIXME( "(%p, %p): stub!\n", iface, value );
+    *value = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT ble_device_access_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+{
+    result->vt = VT_UI4;
+    result->ulVal = DeviceAccessStatus_Allowed;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device3_RequestAccessAsync( IBluetoothLEDevice3 *iface, IAsyncOperation_DeviceAccessStatus **async )
+{
+    TRACE( "(%p, %p)\n", iface, async );
+    return async_operation_uint32_create( &IID_IAsyncOperation_DeviceAccessStatus, (IUnknown *)iface, NULL,
+                                          ble_device_access_async, (IAsyncOperation_IInspectable **)async );
+}
+
+static HRESULT ble_device_get_services_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice3( (IBluetoothLEDevice3 *)invoker );
+    IGattDeviceServicesResult *services_result;
+    IVector_IInspectable *vector = NULL;
+    GUID uuid, *filter = NULL;
+    HRESULT hr;
+
+    if (param)
+    {
+        IPropertyValue *value;
+        if (FAILED((hr = IUnknown_QueryInterface( param, &IID_IPropertyValue, (void **)&value )))) return hr;
+        hr = IPropertyValue_GetGuid( value, &uuid );
+        IPropertyValue_Release( value );
+        if (FAILED(hr)) return hr;
+        filter = &uuid;
+    }
+    ble_device_get_services_vector( &impl->IBluetoothLEDevice_iface, filter, &vector );
+    hr = gatt_device_services_result_create( vector, &services_result );
+    if (vector) IVector_IInspectable_Release( vector );
+    if (FAILED(hr)) return hr;
+    result->vt = VT_UNKNOWN;
+    result->punkVal = (IUnknown *)services_result;
+    return S_OK;
+}
+
+static HRESULT ble_device_start_services_async( IBluetoothLEDevice3 *iface, const GUID *uuid,
+                                                IAsyncOperation_GattDeviceServicesResult **async )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Foundation_PropertyValue;
+    IInspectable *param = NULL;
+    HRESULT hr;
+
+    if (uuid)
+    {
+        IPropertyValueStatics *statics;
+        HSTRING_HEADER hdr;
+        HSTRING str;
+
+        if (FAILED(hr = WindowsCreateStringReference( class_name, wcslen( class_name ), &hdr, &str ))) return hr;
+        if (FAILED(hr = RoGetActivationFactory( str, &IID_IPropertyValueStatics, (void **)&statics ))) return hr;
+        hr = IPropertyValueStatics_CreateGuid( statics, *uuid, &param );
+        IPropertyValueStatics_Release( statics );
+        if (FAILED(hr)) return hr;
+    }
+    hr = async_operation_inspectable_create( &IID_IAsyncOperation_GattDeviceServicesResult, (IUnknown *)iface,
+                                             (IUnknown *)param, ble_device_get_services_async,
+                                             (IAsyncOperation_IInspectable **)async );
+    if (param) IInspectable_Release( param );
+    return hr;
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesAsync( IBluetoothLEDevice3 *iface, IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %p)\n", iface, async );
+    return ble_device_start_services_async( iface, NULL, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesWithCacheModeAsync( IBluetoothLEDevice3 *iface, BluetoothCacheMode mode,
+                                                                     IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %d, %p)\n", iface, mode, async );
+    return ble_device_start_services_async( iface, NULL, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesForUuidAsync( IBluetoothLEDevice3 *iface, GUID uuid,
+                                                               IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( &uuid ), async );
+    return ble_device_start_services_async( iface, &uuid, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesForUuidWithCacheModeAsync( IBluetoothLEDevice3 *iface, GUID uuid,
+                                                                            BluetoothCacheMode mode,
+                                                                            IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %s, %d, %p)\n", iface, debugstr_guid( &uuid ), mode, async );
+    return ble_device_start_services_async( iface, &uuid, async );
+}
+
+static const IBluetoothLEDevice3Vtbl ble_device3_vtbl =
+{
+    ble_device3_QueryInterface,
+    ble_device3_AddRef,
+    ble_device3_Release,
+    ble_device3_GetIids,
+    ble_device3_GetRuntimeClassName,
+    ble_device3_GetTrustLevel,
+    ble_device3_get_DeviceAccessInformation,
+    ble_device3_RequestAccessAsync,
+    ble_device3_GetGattServicesAsync,
+    ble_device3_GetGattServicesWithCacheModeAsync,
+    ble_device3_GetGattServicesForUuidAsync,
+    ble_device3_GetGattServicesForUuidWithCacheModeAsync,
+};
+
+DEFINE_IINSPECTABLE( ble_device4, IBluetoothLEDevice4, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device4_get_BluetoothDeviceId( IBluetoothLEDevice4 *iface, IBluetoothDeviceId **value )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice4( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    return bluetoothdeviceid_create( impl->id, value );
+}
+
+static const IBluetoothLEDevice4Vtbl ble_device4_vtbl =
+{
+    ble_device4_QueryInterface,
+    ble_device4_AddRef,
+    ble_device4_Release,
+    ble_device4_GetIids,
+    ble_device4_GetRuntimeClassName,
+    ble_device4_GetTrustLevel,
+    ble_device4_get_BluetoothDeviceId,
+};
+
+DEFINE_IINSPECTABLE( ble_device5, IBluetoothLEDevice5, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device5_get_WasSecureConnectionUsedForPairing( IBluetoothLEDevice5 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static const IBluetoothLEDevice5Vtbl ble_device5_vtbl =
+{
+    ble_device5_QueryInterface,
+    ble_device5_AddRef,
+    ble_device5_Release,
+    ble_device5_GetIids,
+    ble_device5_GetRuntimeClassName,
+    ble_device5_GetTrustLevel,
+    ble_device5_get_WasSecureConnectionUsedForPairing,
+};
+
 static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, UINT64 addr )
 {
     struct ble_device *impl;
@@ -413,6 +996,12 @@ static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, 
     impl->ref = 1;
     impl->addr = addr;
     impl->IBluetoothLEDevice_iface.lpVtbl = &ble_device_vtbl;
+    impl->IBluetoothLEDevice2_iface.lpVtbl = &ble_device2_vtbl;
+    impl->IBluetoothLEDevice3_iface.lpVtbl = &ble_device3_vtbl;
+    impl->IBluetoothLEDevice4_iface.lpVtbl = &ble_device4_vtbl;
+    impl->IBluetoothLEDevice5_iface.lpVtbl = &ble_device5_vtbl;
+    impl->IClosable_iface.lpVtbl = &ble_device_closable_vtbl;
+    InitializeCriticalSectionEx( &impl->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     *device = &impl->IBluetoothLEDevice_iface;
     return S_OK;
 }

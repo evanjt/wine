@@ -1357,6 +1357,101 @@ static void bluez_gatt_characteristic_read_callback( DBusPendingCall *pending, v
     p_dbus_message_unref( reply );
 }
 
+static void bluez_gatt_operation_callback( DBusPendingCall *pending, void *param )
+{
+    struct winebluetooth_watcher_event_gatt_operation_finished finished = {0};
+    union winebluetooth_watcher_event_data event;
+    struct bluez_async_req_data *data = param;
+    DBusMessage *reply;
+    DBusError error;
+
+    finished.irp = data->irp;
+    reply = p_dbus_pending_call_steal_reply( pending );
+    p_dbus_error_init( &error );
+    if (p_dbus_set_error_from_message( &error, reply ))
+    {
+        WARN( "GATT operation failed: %s\n", dbgstr_dbus_error( &error ) );
+        finished.result = bluez_gatt_error_to_status( &error );
+    }
+    event.gatt_operation_finished = finished;
+    bluez_event_list_queue_new_event( &data->watcher_ctx->event_list,
+                                      BLUETOOTH_WATCHER_EVENT_TYPE_GATT_OPERATION_FINISHED, event );
+    p_dbus_error_free( &error );
+    p_dbus_message_unref( reply );
+}
+
+/* Send a prepared GATT method call and complete irp when BlueZ replies. */
+static NTSTATUS bluez_gatt_send_async( void *connection, void *watcher_ctx, DBusMessage *request, IRP *irp )
+{
+    struct bluez_async_req_data *data;
+    DBusPendingCall *pending_call = NULL;
+
+    if (!(data = malloc( sizeof( *data ) )))
+    {
+        p_dbus_message_unref( request );
+        return STATUS_NO_MEMORY;
+    }
+    data->irp = irp;
+    data->watcher_ctx = watcher_ctx;
+    data->device = NULL;
+    if (!p_dbus_connection_send_with_reply( connection, request, &pending_call, bluez_timeout ) || !pending_call)
+    {
+        p_dbus_message_unref( request );
+        free( data );
+        return STATUS_INTERNAL_ERROR;
+    }
+    p_dbus_message_unref( request );
+    if (!p_dbus_pending_call_set_notify( pending_call, bluez_gatt_operation_callback, data, free ))
+    {
+        free( data );
+        p_dbus_pending_call_cancel( pending_call );
+        p_dbus_pending_call_unref( pending_call );
+        return STATUS_NO_MEMORY;
+    }
+    p_dbus_pending_call_unref( pending_call );
+    return STATUS_PENDING;
+}
+
+NTSTATUS bluez_gatt_characteristic_write( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                          const BYTE *data, ULONG size, BOOL without_response )
+{
+    DBusMessageIter args_iter, array_iter, dict_iter = DBUS_MESSAGE_ITER_INIT_CLOSED;
+    const char *type = without_response ? "command" : "request";
+    DBusMessage *request;
+
+    TRACE( "(%s, %p, %lu, %d)\n", debugstr_a( chrc->str ), irp, size, without_response );
+
+    request = p_dbus_message_new_method_call( BLUEZ_DEST, chrc->str, BLUEZ_INTERFACE_GATT_CHARACTERISTICS, "WriteValue" );
+    if (!request)
+        return STATUS_NO_MEMORY;
+    p_dbus_message_iter_init_append( request, &args_iter );
+    if (!p_dbus_message_iter_open_container( &args_iter, DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE_AS_STRING, &array_iter ) ||
+        !p_dbus_message_iter_append_fixed_array( &array_iter, DBUS_TYPE_BYTE, &data, size ) ||
+        !p_dbus_message_iter_close_container( &args_iter, &array_iter ) ||
+        !p_dbus_message_iter_open_container( &args_iter, DBUS_TYPE_ARRAY, "{sv}", &dict_iter ) ||
+        !bluez_variant_dict_add_entry( &dict_iter, "type", DBUS_TYPE_STRING, DBUS_TYPE_STRING_AS_STRING, &type ) ||
+        !p_dbus_message_iter_close_container( &args_iter, &dict_iter ))
+    {
+        p_dbus_message_unref( request );
+        return STATUS_NO_MEMORY;
+    }
+    return bluez_gatt_send_async( connection, watcher_ctx, request, irp );
+}
+
+NTSTATUS bluez_gatt_characteristic_set_notify( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                               BOOL enable )
+{
+    DBusMessage *request;
+
+    TRACE( "(%s, %p, %d)\n", debugstr_a( chrc->str ), irp, enable );
+
+    request = p_dbus_message_new_method_call( BLUEZ_DEST, chrc->str, BLUEZ_INTERFACE_GATT_CHARACTERISTICS,
+                                              enable ? "StartNotify" : "StopNotify" );
+    if (!request)
+        return STATUS_NO_MEMORY;
+    return bluez_gatt_send_async( connection, watcher_ctx, request, irp );
+}
+
 /* The status of a pairing session initiated by BlueZ. */
 enum bluez_pairing_session_status
 {
@@ -2127,6 +2222,7 @@ static void winebluetooth_watcher_event_free( enum winebluetooth_watcher_event_t
         break;
     case BLUETOOTH_WATCHER_EVENT_TYPE_PAIRING_FINISHED:
     case BLUETOOTH_WATCHER_EVENT_TYPE_CONNECT_FINISHED:
+    case BLUETOOTH_WATCHER_EVENT_TYPE_GATT_OPERATION_FINISHED:
         break;
     case BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_ADDED:
         if (event->gatt_service_added.device.handle)
@@ -2986,6 +3082,16 @@ NTSTATUS bluez_device_start_pairing( void *connection, void *watcher_ctx, struct
     return STATUS_NOT_SUPPORTED;
 }
 NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_name *device, IRP *irp )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+NTSTATUS bluez_gatt_characteristic_write( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                          const BYTE *data, ULONG size, BOOL without_response )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+NTSTATUS bluez_gatt_characteristic_set_notify( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                               BOOL enable )
 {
     return STATUS_NOT_SUPPORTED;
 }

@@ -324,6 +324,66 @@ static NTSTATUS bluetooth_gatt_service_dispatch( DEVICE_OBJECT *device, struct b
         LeaveCriticalSection( &ext->chars_cs );
         break;
     }
+    case IOCTL_WINEBTH_GATT_SERVICE_WRITE_CHARACTERISTIC_VALUE:
+    {
+        struct winebth_gatt_service_write_characteristic_value_params *params = irp->AssociatedIrp.SystemBuffer;
+        ULONG insize = stack->Parameters.DeviceIoControl.InputBufferLength;
+        struct bluetooth_gatt_characteristic *chrc;
+
+        if (!params || insize < sizeof( *params ) ||
+            insize < offsetof( struct winebth_gatt_service_write_characteristic_value_params, buf[params->size] ))
+        {
+            status = STATUS_INVALID_USER_BUFFER;
+            break;
+        }
+        EnterCriticalSection( &ext->chars_cs );
+        chrc = find_gatt_characteristic( &ext->characteristics, &params->uuid, params->handle );
+        if (!chrc)
+            status = STATUS_NOT_FOUND;
+        else if (!chrc->props.IsWritable && !chrc->props.IsWritableWithoutResponse)
+            status = STATUS_PRIVILEGE_NOT_HELD;
+        else
+        {
+            status = winebluetooth_gatt_characteristic_write_async( chrc->characteristic, irp, params->buf, params->size,
+                                                                    !!params->without_response );
+            if (status == STATUS_PENDING)
+            {
+                IoMarkIrpPending( irp );
+                InsertTailList( &ext->irp_list, &irp->Tail.Overlay.ListEntry );
+            }
+        }
+        LeaveCriticalSection( &ext->chars_cs );
+        break;
+    }
+    case IOCTL_WINEBTH_GATT_SERVICE_SET_CHARACTERISTIC_NOTIFY:
+    {
+        struct winebth_gatt_service_set_characteristic_notify_params *params = irp->AssociatedIrp.SystemBuffer;
+        ULONG insize = stack->Parameters.DeviceIoControl.InputBufferLength;
+        struct bluetooth_gatt_characteristic *chrc;
+
+        if (!params || insize < sizeof( *params ))
+        {
+            status = STATUS_INVALID_USER_BUFFER;
+            break;
+        }
+        EnterCriticalSection( &ext->chars_cs );
+        chrc = find_gatt_characteristic( &ext->characteristics, &params->uuid, params->handle );
+        if (!chrc)
+            status = STATUS_NOT_FOUND;
+        else if (!chrc->props.IsNotifiable && !chrc->props.IsIndicatable)
+            status = STATUS_PRIVILEGE_NOT_HELD;
+        else
+        {
+            status = winebluetooth_gatt_characteristic_set_notify_async( chrc->characteristic, irp, !!params->enable );
+            if (status == STATUS_PENDING)
+            {
+                IoMarkIrpPending( irp );
+                InsertTailList( &ext->irp_list, &irp->Tail.Overlay.ListEntry );
+            }
+        }
+        LeaveCriticalSection( &ext->chars_cs );
+        break;
+    }
     default:
         FIXME( "Unimplemented IOCTL code: %#lx\n", code );
     }
@@ -1753,6 +1813,36 @@ static void bluetooth_gatt_characteristic_remove( winebluetooth_gatt_characteris
     winebluetooth_gatt_characteristic_free( handle );
 }
 
+/* Caller must hold svc->chars_cs. */
+static void bluetooth_gatt_service_report_value_changed( struct bluetooth_gatt_service *svc,
+                                                         struct bluetooth_gatt_characteristic *chrc )
+{
+    TARGET_DEVICE_CUSTOM_NOTIFICATION *notification;
+    struct winebth_gatt_value_changed *changed;
+    SIZE_T data_size, notif_size;
+    NTSTATUS ret;
+
+    data_size = offsetof( struct winebth_gatt_value_changed, data[chrc->value->DataSize] );
+    notif_size = offsetof( TARGET_DEVICE_CUSTOM_NOTIFICATION, CustomDataBuffer[data_size] );
+    if (!(notification = ExAllocatePool( PagedPool, notif_size )))
+        return;
+    notification->Version = 1;
+    notification->Size = notif_size;
+    notification->Event = GUID_WINEBTH_GATT_VALUE_CHANGED;
+    notification->FileObject = NULL;
+    notification->NameBufferOffset = -1;
+    changed = (struct winebth_gatt_value_changed *)notification->CustomDataBuffer;
+    changed->uuid = chrc->props.CharacteristicUuid;
+    changed->handle = chrc->props.AttributeHandle;
+    changed->size = chrc->value->DataSize;
+    memcpy( changed->data, chrc->value->Data, chrc->value->DataSize );
+
+    ret = IoReportTargetDeviceChange( svc->device_obj, notification );
+    if (ret)
+        ERR( "IoReportTargetDeviceChange failed: %#lx\n", ret );
+    ExFreePool( notification );
+}
+
 static void bluetooth_gatt_characteristic_value_update( struct winebluetooth_watcher_event_gatt_characteristic_value_changed event )
 {
     struct bluetooth_radio *radio;
@@ -1798,6 +1888,7 @@ static void bluetooth_gatt_characteristic_value_update( struct winebluetooth_wat
                         chrc->value->DataSize = event.value.size;
                         winebluetooth_gatt_characteristic_value_move( &event.value, chrc->value->Data );
                         free_chrc_val = FALSE;
+                        bluetooth_gatt_service_report_value_changed( svc, chrc );
                         LeaveCriticalSection( &svc->chars_cs );
                         LeaveCriticalSection( &device->props_cs );
                         goto done;
@@ -1846,6 +1937,17 @@ static void bluetooth_gatt_characteristic_value_read_complete_irp(
 
     EnterCriticalSection( &ext->gatt_service.chars_cs );
     complete_irp( read.irp, status );
+    LeaveCriticalSection( &ext->gatt_service.chars_cs );
+}
+
+static void bluetooth_gatt_operation_complete_irp( struct winebluetooth_watcher_event_gatt_operation_finished finished )
+{
+    IO_STACK_LOCATION *stack = IoGetCurrentIrpStackLocation( finished.irp );
+    struct bluetooth_pdo_ext *ext = stack->DeviceObject->DeviceExtension;
+
+    assert( ext->type == BLUETOOTH_PDO_EXT_GATT_SERVICE );
+    EnterCriticalSection( &ext->gatt_service.chars_cs );
+    complete_irp( finished.irp, finished.result );
     LeaveCriticalSection( &ext->gatt_service.chars_cs );
 }
 
@@ -1924,6 +2026,9 @@ static DWORD CALLBACK bluetooth_event_loop_thread_proc( void *arg )
                         break;
                     case BLUETOOTH_WATCHER_EVENT_TYPE_CONNECT_FINISHED:
                         bluetooth_device_connect_finished( event->event_data.connect_finished );
+                        break;
+                    case BLUETOOTH_WATCHER_EVENT_TYPE_GATT_OPERATION_FINISHED:
+                        bluetooth_gatt_operation_complete_irp( event->event_data.gatt_operation_finished );
                         break;
                     case BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_ADDED:
                         bluetooth_device_add_gatt_service( event->event_data.gatt_service_added );
