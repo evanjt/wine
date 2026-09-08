@@ -241,7 +241,7 @@ DNS_STATUS WINAPI DnsReplaceRecordSetW( DNS_RECORDW *set, DWORD options, HANDLE 
 DNS_STATUS WINAPI DnsServiceBrowse( PDNS_SERVICE_BROWSE_REQUEST request, PDNS_SERVICE_CANCEL cancel)
 {
     FIXME( "(%p, %p) stub\n", request, cancel );
-    return ERROR_SUCCESS;
+    return DNS_REQUEST_PENDING;
 }
 
 /******************************************************************************
@@ -373,7 +373,7 @@ DNS_STATUS WINAPI DnsServiceResolveCancel( PDNS_SERVICE_CANCEL cancel )
 DNS_STATUS WINAPI DnsServiceBrowseCancel( PDNS_SERVICE_CANCEL cancel )
 {
     FIXME( "(%p) stub\n", cancel );
-    return ERROR_CALL_NOT_IMPLEMENTED;
+    return ERROR_SUCCESS;
 }
 
 /******************************************************************************
