@@ -1505,9 +1505,8 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                     device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
                 {
                     ULONGLONG now = GetTickCount64();
-                    BOOL rssi_only = !(event.changed_props_mask & (WINEBLUETOOTH_DEVICE_LE_PROPERTIES & ~WINEBLUETOOTH_DEVICE_PROPERTY_RSSI));
 
-                    if (!rssi_only || now - device->last_adv_report >= 200)
+                    if (now - device->last_adv_report >= 500)
                     {
                         device->last_adv_report = now;
                         bluetooth_device_fill_le_advertisement( device, &adv );
@@ -1526,7 +1525,10 @@ done:
 
     if (radio_obj)
     {
-        bluetooth_radio_report_radio_in_range_event( radio_obj, device_old_flags, &device_new_info );
+        /* Signal strength and advertisement data do not appear in BTH_DEVICE_INFO, so only changes to the
+         * classic properties are worth an in-range event. */
+        if (event.changed_props_mask & ~WINEBLUETOOTH_DEVICE_LE_PROPERTIES || event.invalid_props_mask)
+            bluetooth_radio_report_radio_in_range_event( radio_obj, device_old_flags, &device_new_info );
         if (report_adv)
             bluetooth_radio_report_le_advertisement( radio_obj, &adv );
     }
