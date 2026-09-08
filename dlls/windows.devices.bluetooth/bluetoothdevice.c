@@ -22,6 +22,8 @@
 #include "setupapi.h"
 #include "cfgmgr32.h"
 #include "bthdef.h"
+#include "winioctl.h"
+#include "wine/winebth.h"
 #include "initguid.h"
 #include "devpkey.h"
 #include "bthledef.h"
@@ -1006,27 +1008,20 @@ static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, 
     return S_OK;
 }
 
-static HRESULT bluetoothledevice_get_device_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+/* Look up the driver's device node for an LE address. */
+static BOOL find_le_device( UINT64 addr, WCHAR *path, DWORD path_size )
 {
     char buffer[sizeof( SP_DEVICE_INTERFACE_DETAIL_DATA_W ) + MAX_PATH * sizeof( WCHAR )];
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
     SP_DEVICE_INTERFACE_DATA iface_data = { .cbSize = sizeof( iface_data ) };
-    IBluetoothLEDevice *device;
     BOOL found = FALSE;
     HDEVINFO devinfo;
     DWORD idx = 0;
-    UINT64 addr;
-    HRESULT hr;
-
-    if (!called_async) return STATUS_PENDING;
-    if (FAILED(hr = IPropertyValue_GetUInt64( (IPropertyValue *)param, &addr )))
-        return hr;
 
     devinfo = SetupDiGetClassDevsW( &GUID_BLUETOOTHLE_DEVICE_INTERFACE, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
-    if (devinfo == INVALID_HANDLE_VALUE)
-        return HRESULT_FROM_WIN32( GetLastError() );
+    if (devinfo == INVALID_HANDLE_VALUE) return FALSE;
+
     iface_detail->cbSize = sizeof( *iface_detail );
-    result->vt = VT_NULL;
     while (SetupDiEnumDeviceInterfaces( devinfo, NULL, &GUID_BLUETOOTHLE_DEVICE_INTERFACE, idx++, &iface_data ))
     {
         SP_DEVINFO_DATA devinfo_data = { .cbSize = sizeof( devinfo_data ) };
@@ -1043,14 +1038,62 @@ static HRESULT bluetoothledevice_get_device_async( IUnknown *invoker, IUnknown *
         if (addr == addr2)
         {
             found = TRUE;
+            lstrcpynW( path, iface_detail->DevicePath, path_size );
             break;
         }
     }
-
     SetupDiDestroyDeviceInfoList( devinfo );
+    return found;
+}
+
+static HRESULT bluetoothledevice_get_device_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+{
+    struct winebth_radio_start_discovery_params discovery = { .le = 1 };
+    BLUETOOTH_FIND_RADIO_PARAMS radio_params = { .dwSize = sizeof( radio_params ) };
+    HBLUETOOTH_RADIO_FIND find;
+    HANDLE radio = NULL;
+    WCHAR path[MAX_PATH];
+    IBluetoothLEDevice *device;
+    BOOL found, scanning = FALSE;
+    UINT64 addr;
+    HRESULT hr;
+    DWORD bytes;
+    int i;
+
+    if (!called_async) return STATUS_PENDING;
+    if (FAILED(hr = IPropertyValue_GetUInt64( (IPropertyValue *)param, &addr )))
+        return hr;
+
+    result->vt = VT_NULL;
+
+    /* BlueZ forgets unpaired devices soon after scanning stops. Windows scans on demand until the device is
+     * heard again, so do the same for a while. */
+    for (i = 0; !(found = find_le_device( addr, path, ARRAY_SIZE( path ) )) && i < 40; i++)
+    {
+        if (!scanning)
+        {
+            if ((find = BluetoothFindFirstRadio( &radio_params, &radio )))
+            {
+                BluetoothFindRadioClose( find );
+                scanning = DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_START_DISCOVERY, &discovery, sizeof( discovery ),
+                                            NULL, 0, &bytes, NULL );
+                if (!scanning) WARN( "Failed to start discovery: %lu\n", GetLastError() );
+            }
+            if (!scanning) break;
+            TRACE( "Device %#I64x not present, scanning for it\n", addr );
+        }
+        Sleep( 500 );
+    }
+    if (scanning)
+        DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_STOP_DISCOVERY, NULL, 0, NULL, 0, &bytes, NULL );
+    if (radio) CloseHandle( radio );
+
     if (!found)
+    {
+        WARN( "Device %#I64x not found\n", addr );
         return S_OK;
-    if (FAILED(hr = ble_device_create( &device, iface_detail->DevicePath, addr )))
+    }
+    if (FAILED(hr = ble_device_create( &device, path, addr )))
         return hr;
     result->vt = VT_UNKNOWN;
     result->punkVal = (IUnknown *)device;
