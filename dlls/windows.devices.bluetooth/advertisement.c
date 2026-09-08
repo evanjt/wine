@@ -1729,25 +1729,35 @@ static DWORD CALLBACK adv_watcher_notify_callback( HCMNOTIFICATION notify, void 
 static void CALLBACK adv_watcher_replay( TP_CALLBACK_INSTANCE *instance, void *ctx )
 {
     struct adv_watcher *impl = ctx;
-    struct winebth_radio_get_le_advertisements_params *params;
-    DWORD size = offsetof( struct winebth_radio_get_le_advertisements_params, advertisements[32] ), bytes, i;
+    struct winebth_radio_get_le_advertisements_params *params = NULL;
+    DWORD capacity = 32, size, bytes, i;
     HANDLE radio;
 
     EnterCriticalSection( &impl->cs );
     radio = impl->status == BluetoothLEAdvertisementWatcherStatus_Started ? impl->radio : NULL;
     LeaveCriticalSection( &impl->cs );
+    if (!radio) goto done;
 
-    if (radio && (params = malloc( size )))
+    for (;;)
     {
-        if (DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS, NULL, 0, params, size, &bytes, NULL ))
+        void *tmp;
+
+        size = offsetof( struct winebth_radio_get_le_advertisements_params, advertisements[capacity] );
+        if (!(tmp = realloc( params, size ))) goto done;
+        params = tmp;
+        if (DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS, NULL, 0, params, size, &bytes, NULL )) break;
+        if (GetLastError() != ERROR_MORE_DATA || params->count <= capacity)
         {
-            for (i = 0; i < min( params->count, 32 ); i++)
-                adv_watcher_dispatch_received( impl, &params->advertisements[i] );
-        }
-        else
             WARN( "IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS failed: %lu\n", GetLastError() );
-        free( params );
+            goto done;
+        }
+        capacity = params->count + 8;
     }
+    for (i = 0; i < min( params->count, capacity ); i++)
+        adv_watcher_dispatch_received( impl, &params->advertisements[i] );
+
+done:
+    free( params );
     IBluetoothLEAdvertisementWatcher_Release( &impl->IBluetoothLEAdvertisementWatcher_iface );
 }
 
