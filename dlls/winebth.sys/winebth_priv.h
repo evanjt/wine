@@ -177,6 +177,7 @@ typedef UINT16 winebluetooth_device_props_mask_t;
 #define WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS             (1 << 11)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA (1 << 12)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA      (1 << 13)
+#define WINEBLUETOOTH_DEVICE_PROPERTY_SERVICES_RESOLVED (1 << 14)
 #define WINEBLUETOOTH_DEVICE_LE_PROPERTIES                                                      \
     (WINEBLUETOOTH_DEVICE_PROPERTY_RSSI | WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER |              \
      WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE | WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE |    \
@@ -187,7 +188,8 @@ typedef UINT16 winebluetooth_device_props_mask_t;
     (WINEBLUETOOTH_DEVICE_PROPERTY_NAME | WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS |           \
      WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED | WINEBLUETOOTH_DEVICE_PROPERTY_PAIRED |       \
      WINEBLUETOOTH_DEVICE_PROPERTY_LEGACY_PAIRING | WINEBLUETOOTH_DEVICE_PROPERTY_TRUSTED | \
-     WINEBLUETOOTH_DEVICE_PROPERTY_CLASS | WINEBLUETOOTH_DEVICE_LE_PROPERTIES)
+     WINEBLUETOOTH_DEVICE_PROPERTY_CLASS | WINEBLUETOOTH_DEVICE_LE_PROPERTIES |            \
+     WINEBLUETOOTH_DEVICE_PROPERTY_SERVICES_RESOLVED)
 
 union winebluetooth_property
 {
@@ -219,6 +221,7 @@ struct winebluetooth_device_properties
     BOOL legacy_pairing;
     BOOL trusted;
     UINT32 class;
+    BOOL services_resolved;
     /* LE advertisement data. The address, name and flags fields are filled in by the driver. */
     struct winebth_le_advertisement le;
 };
@@ -263,6 +266,7 @@ NTSTATUS winebluetooth_device_disconnect( winebluetooth_device_t device );
 NTSTATUS winebluetooth_auth_send_response( winebluetooth_device_t device, BLUETOOTH_AUTHENTICATION_METHOD method,
                                            UINT32 numeric_or_passkey, BOOL negative, BOOL *authenticated );
 NTSTATUS winebluetooth_device_start_pairing( winebluetooth_device_t device, IRP *irp );
+NTSTATUS winebluetooth_device_connect( winebluetooth_device_t device, IRP *irp );
 
 void winebluetooth_gatt_service_free( winebluetooth_gatt_service_t service );
 static inline BOOL winebluetooth_gatt_service_equal( winebluetooth_gatt_service_t s1, winebluetooth_gatt_service_t s2)
@@ -297,6 +301,7 @@ enum winebluetooth_watcher_event_type
     BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_REMOVED,
     BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_PROPERTIES_CHANGED,
     BLUETOOTH_WATCHER_EVENT_TYPE_PAIRING_FINISHED,
+    BLUETOOTH_WATCHER_EVENT_TYPE_CONNECT_FINISHED,
     BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_ADDED,
     BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_REMOVED,
     BLUETOOTH_WATCHER_EVENT_TYPE_GATT_CHARACTERISTIC_ADDED,
@@ -350,6 +355,13 @@ struct winebluetooth_watcher_event_pairing_finished
     NTSTATUS result;
 };
 
+struct winebluetooth_watcher_event_connect_finished
+{
+    winebluetooth_device_t device;
+    IRP *irp;
+    NTSTATUS result;
+};
+
 struct winebluetooth_watcher_event_gatt_service_added
 {
     winebluetooth_device_t device;
@@ -399,6 +411,7 @@ union winebluetooth_watcher_event_data
     struct winebluetooth_watcher_event_device_removed device_removed;
     struct winebluetooth_watcher_event_device_props_changed device_props_changed;
     struct winebluetooth_watcher_event_pairing_finished pairing_finished;
+    struct winebluetooth_watcher_event_connect_finished connect_finished;
     struct winebluetooth_watcher_event_gatt_service_added gatt_service_added;
     winebluetooth_gatt_service_t gatt_service_removed;
     struct winebluetooth_watcher_event_gatt_characteristic_added gatt_characteristic_added;
