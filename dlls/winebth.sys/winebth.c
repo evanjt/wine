@@ -134,6 +134,7 @@ struct bluetooth_gatt_characteristic
     winebluetooth_gatt_characteristic_t characteristic;
     BTH_LE_GATT_CHARACTERISTIC props;
     BTH_LE_GATT_CHARACTERISTIC_VALUE *value;
+    BOOL notifying; /* Whether a BlueZ notify session was requested. Guarded by chars_cs */
 };
 
 enum bluetooth_pdo_ext_type
@@ -372,11 +373,15 @@ static NTSTATUS bluetooth_gatt_service_dispatch( DEVICE_OBJECT *device, struct b
             status = STATUS_NOT_FOUND;
         else if (!chrc->props.IsNotifiable && !chrc->props.IsIndicatable)
             status = STATUS_PRIVILEGE_NOT_HELD;
+        else if (!!params->enable == chrc->notifying)
+            /* BlueZ rejects stopping a session that was never started, Windows does not. */
+            status = STATUS_SUCCESS;
         else
         {
             status = winebluetooth_gatt_characteristic_set_notify_async( chrc->characteristic, irp, !!params->enable );
             if (status == STATUS_PENDING)
             {
+                chrc->notifying = !!params->enable;
                 IoMarkIrpPending( irp );
                 InsertTailList( &ext->irp_list, &irp->Tail.Overlay.ListEntry );
             }
