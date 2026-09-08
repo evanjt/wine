@@ -32,22 +32,35 @@ WINE_DEFAULT_DEBUG_CHANNEL( bluetooth );
 
 /* --- Helpers --- */
 
-HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
+static IBufferFactory *buffer_factory;
+
+static HRESULT get_buffer_factory( IBufferFactory **factory )
 {
     static const WCHAR class_name[] = L"Windows.Storage.Streams.Buffer";
-    IBufferByteAccess *access;
-    IBufferFactory *factory;
+    IBufferFactory *created;
     HSTRING_HEADER hdr;
     HSTRING str;
+    HRESULT hr;
+
+    if ((*factory = buffer_factory)) return S_OK;
+    if (FAILED((hr = WindowsCreateStringReference( class_name, ARRAY_SIZE( class_name ) - 1, &hdr, &str )))) return hr;
+    if (FAILED((hr = RoGetActivationFactory( str, &IID_IBufferFactory, (void **)&created )))) return hr;
+    if (InterlockedCompareExchangePointer( (void **)&buffer_factory, created, NULL ))
+        IBufferFactory_Release( created );
+    *factory = buffer_factory;
+    return S_OK;
+}
+
+HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
+{
+    IBufferByteAccess *access;
+    IBufferFactory *factory;
     HRESULT hr;
     BYTE *bytes;
 
     *out = NULL;
-    if (FAILED((hr = WindowsCreateStringReference( class_name, ARRAY_SIZE( class_name ) - 1, &hdr, &str )))) return hr;
-    if (FAILED((hr = RoGetActivationFactory( str, &IID_IBufferFactory, (void **)&factory )))) return hr;
-    hr = IBufferFactory_Create( factory, size, out );
-    IBufferFactory_Release( factory );
-    if (FAILED(hr)) return hr;
+    if (FAILED((hr = get_buffer_factory( &factory )))) return hr;
+    if (FAILED((hr = IBufferFactory_Create( factory, size, out )))) return hr;
 
     if (FAILED((hr = IBuffer_QueryInterface( *out, &IID_IBufferByteAccess, (void **)&access ))))
     {

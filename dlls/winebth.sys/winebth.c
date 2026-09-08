@@ -109,6 +109,7 @@ struct bluetooth_remote_device
     LIST_ENTRY gatt_irp_list; /* GATT service requests waiting for a connection. Guarded by props_cs */
     BOOL connecting; /* A BlueZ Connect call is in flight. Guarded by props_cs */
     unsigned int connect_attempts; /* Guarded by props_cs */
+    ULONGLONG last_adv_report; /* Tick count of the last advertisement event. Guarded by props_cs */
 };
 
 struct bluetooth_gatt_service
@@ -1497,12 +1498,21 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                     bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
                 else if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED && !device->props.connected)
                     bluetooth_device_complete_gatt_irps( device, STATUS_DEVICE_NOT_CONNECTED );
-                /* Any change to advertisement data while the device is in range counts as a new advertisement. */
+                /* Any change to advertisement data while the device is in range counts as a new advertisement.
+                 * Devices advertise many times a second, and each event crosses into user space, so signal
+                 * strength changes on their own are rate limited. */
                 if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_LE_PROPERTIES &&
                     device->props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
                 {
-                    bluetooth_device_fill_le_advertisement( device, &adv );
-                    report_adv = TRUE;
+                    ULONGLONG now = GetTickCount64();
+                    BOOL rssi_only = !(event.changed_props_mask & (WINEBLUETOOTH_DEVICE_LE_PROPERTIES & ~WINEBLUETOOTH_DEVICE_PROPERTY_RSSI));
+
+                    if (!rssi_only || now - device->last_adv_report >= 200)
+                    {
+                        device->last_adv_report = now;
+                        bluetooth_device_fill_le_advertisement( device, &adv );
+                        report_adv = TRUE;
+                    }
                 }
                 LeaveCriticalSection( &device->props_cs );
 
