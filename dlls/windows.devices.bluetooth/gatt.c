@@ -1844,6 +1844,7 @@ struct gatt_descriptor
 {
     IGattDescriptor IGattDescriptor_iface;
     IGattDescriptor2 IGattDescriptor2_iface;
+    IClosable IClosable_iface;
     LONG ref;
     struct gatt_characteristic *characteristic;
     GUID uuid;
@@ -1876,6 +1877,12 @@ static HRESULT WINAPI gatt_descriptor_QueryInterface( IGattDescriptor *iface, RE
     {
         IGattDescriptor_AddRef( iface );
         *out = &impl->IGattDescriptor2_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IClosable ))
+    {
+        IGattDescriptor_AddRef( iface );
+        *out = &impl->IClosable_iface;
         return S_OK;
     }
     *out = NULL;
@@ -2041,6 +2048,26 @@ static const IGattDescriptor2Vtbl gatt_descriptor2_vtbl =
     gatt_descriptor2_WriteValueWithResultAsync,
 };
 
+DEFINE_IINSPECTABLE_( gatt_descriptor_closable, IClosable, struct gatt_descriptor, gatt_descriptor_from_IClosable,
+                      IClosable_iface, &impl->IGattDescriptor_iface )
+
+static HRESULT WINAPI gatt_descriptor_closable_Close( IClosable *iface )
+{
+    TRACE( "(%p)\n", iface );
+    return S_OK;
+}
+
+static const IClosableVtbl gatt_descriptor_closable_vtbl =
+{
+    gatt_descriptor_closable_QueryInterface,
+    gatt_descriptor_closable_AddRef,
+    gatt_descriptor_closable_Release,
+    gatt_descriptor_closable_GetIids,
+    gatt_descriptor_closable_GetRuntimeClassName,
+    gatt_descriptor_closable_GetTrustLevel,
+    gatt_descriptor_closable_Close,
+};
+
 static HRESULT gatt_descriptor_create( struct gatt_characteristic *chrc, const GUID *uuid, UINT16 handle, IGattDescriptor **out )
 {
     struct gatt_descriptor *impl;
@@ -2048,6 +2075,7 @@ static HRESULT gatt_descriptor_create( struct gatt_characteristic *chrc, const G
     if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
     impl->IGattDescriptor_iface.lpVtbl = &gatt_descriptor_vtbl;
     impl->IGattDescriptor2_iface.lpVtbl = &gatt_descriptor2_vtbl;
+    impl->IClosable_iface.lpVtbl = &gatt_descriptor_closable_vtbl;
     impl->ref = 1;
     impl->characteristic = chrc;
     IGattCharacteristic_AddRef( &chrc->IGattCharacteristic_iface );
