@@ -143,6 +143,12 @@ struct bluetooth_device_start_pairing_params
     IRP *irp;
 };
 
+struct bluetooth_device_connect_params
+{
+    unix_name_t device;
+    IRP *irp;
+};
+
 struct bluetooth_gatt_characteristic_read_params
 {
     unix_name_t chrc;
@@ -171,6 +177,7 @@ enum bluetoothapis_funcs
     unix_bluetooth_device_dup,
     unix_bluetooth_device_disconnect,
     unix_bluetooth_device_start_pairing,
+    unix_bluetooth_device_connect,
 
     unix_bluetooth_auth_agent_enable_incoming,
     unix_bluetooth_auth_send_response,

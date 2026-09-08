@@ -889,6 +889,15 @@ static void bluez_device_prop_from_dict_entry( const char *prop_name, DBusMessag
         p_dbus_message_iter_get_basic( variant, &props->class );
         *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_CLASS;
     }
+    else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_SERVICES_RESOLVED &&
+             !strcmp( prop_name, "ServicesResolved" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_BOOLEAN)
+    {
+        dbus_bool_t resolved;
+        p_dbus_message_iter_get_basic( variant, &resolved );
+        props->services_resolved = !!resolved;
+        *props_mask |= WINEBLUETOOTH_DEVICE_PROPERTY_SERVICES_RESOLVED;
+    }
     else if (wanted_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI &&
              !strcmp( prop_name, "RSSI" ) &&
              p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_INT16)
@@ -1237,6 +1246,7 @@ struct bluez_async_req_data
 {
     IRP *irp;
     struct bluez_watcher_ctx *watcher_ctx;
+    struct unix_name *device;
 };
 
 static void bluez_gatt_characteristic_read_callback( DBusPendingCall *pending, void *param );
@@ -1871,6 +1881,75 @@ NTSTATUS bluez_device_start_pairing( void *connection, void *watcher_ctx, struct
     return STATUS_PENDING;
 }
 
+static void bluez_device_connect_callback( DBusPendingCall *pending, void *param )
+{
+    struct bluez_async_req_data *data = param;
+    DBusMessage *reply;
+    DBusError error;
+    union winebluetooth_watcher_event_data event = {0};
+
+    event.connect_finished.irp = data->irp;
+    event.connect_finished.device.handle = (UINT_PTR)data->device;
+    reply = p_dbus_pending_call_steal_reply( pending );
+    p_dbus_error_init( &error );
+    if (p_dbus_set_error_from_message( &error, reply ))
+    {
+        event.connect_finished.result = bluez_dbus_error_to_ntstatus( &error );
+        ERR( "Failed to connect: %s\n", dbgstr_dbus_error( &error ) );
+    }
+    p_dbus_error_free( &error );
+
+    bluez_event_list_queue_new_event( &data->watcher_ctx->event_list,
+                                      BLUETOOTH_WATCHER_EVENT_TYPE_CONNECT_FINISHED, event );
+    p_dbus_message_unref( reply );
+}
+
+NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_name *device, IRP *irp )
+{
+    DBusMessage *request;
+    DBusPendingCall *pending_call = NULL;
+    struct bluez_async_req_data *data;
+    dbus_bool_t success;
+
+    TRACE( "(%p, %p, %s, %p)\n", connection, watcher_ctx, debugstr_a( device->str ), irp );
+
+    request = p_dbus_message_new_method_call( BLUEZ_DEST, device->str, BLUEZ_INTERFACE_DEVICE, "Connect" );
+    if (!request)
+        return STATUS_NO_MEMORY;
+
+    data = malloc( sizeof( *data ) );
+    if (!data)
+    {
+        p_dbus_message_unref( request );
+        return STATUS_NO_MEMORY;
+    }
+    data->irp = irp;
+    data->device = unix_name_dup( device );
+    data->watcher_ctx = watcher_ctx;
+    success = p_dbus_connection_send_with_reply( connection, request, &pending_call, bluez_timeout );
+    p_dbus_message_unref( request );
+    if (!success)
+    {
+        free( data );
+        return STATUS_NO_MEMORY;
+    }
+    if (!pending_call)
+    {
+        free( data );
+        return STATUS_INTERNAL_ERROR;
+    }
+    if (!p_dbus_pending_call_set_notify( pending_call, bluez_device_connect_callback, data, free ))
+    {
+        free( data );
+        p_dbus_pending_call_cancel( pending_call );
+        p_dbus_pending_call_unref( pending_call );
+        return STATUS_NO_MEMORY;
+    }
+
+    p_dbus_pending_call_unref( pending_call );
+    return STATUS_PENDING;
+}
+
 struct bluez_watcher_event
 {
     struct list entry;
@@ -2047,6 +2126,7 @@ static void winebluetooth_watcher_event_free( enum winebluetooth_watcher_event_t
             unix_name_free( (struct unix_name *)event->device_props_changed.device.handle );
         break;
     case BLUETOOTH_WATCHER_EVENT_TYPE_PAIRING_FINISHED:
+    case BLUETOOTH_WATCHER_EVENT_TYPE_CONNECT_FINISHED:
         break;
     case BLUETOOTH_WATCHER_EVENT_TYPE_DEVICE_GATT_SERVICE_ADDED:
         if (event->gatt_service_added.device.handle)
@@ -2498,7 +2578,8 @@ static void bluez_signal_handler( DBusConnection *conn, DBusMessage *msg, const 
                 { "Appearance", WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE },
                 { "UUIDs", WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS },
                 { "ManufacturerData", WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA },
-                { "ServiceData", WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA }
+                { "ServiceData", WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA },
+                { "ServicesResolved", WINEBLUETOOTH_DEVICE_PROPERTY_SERVICES_RESOLVED }
             };
 
             p_dbus_message_iter_next( &iter );
@@ -2901,6 +2982,10 @@ NTSTATUS bluez_device_disconnect( void *connection, const char *device_path )
     return STATUS_NOT_SUPPORTED;
 }
 NTSTATUS bluez_device_start_pairing( void *connection, void *watcher_ctx, struct unix_name *device, IRP *irp )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_name *device, IRP *irp )
 {
     return STATUS_NOT_SUPPORTED;
 }
