@@ -497,6 +497,7 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
                 status = winebluetooth_device_connect( ext->device, irp );
                 ext->connecting = status == STATUS_PENDING;
                 ext->connect_attempts = 1;
+                if (status != STATUS_PENDING) winebluetooth_device_free( ext->device );
             }
             if (status == STATUS_PENDING)
             {
@@ -1496,7 +1497,10 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                 bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, device->props_mask );
                 if (device->props.connected && device->props.services_resolved)
                     bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
-                else if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED && !device->props.connected)
+                /* A failed Connect can emit Connected=false before or after its reply. Keep requests
+                 * queued while Connect (including a retry) owns them, so this signal cannot abort it. */
+                else if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED &&
+                         !device->props.connected && !device->connecting)
                     bluetooth_device_complete_gatt_irps( device, STATUS_DEVICE_NOT_CONNECTED );
                 /* Any change to advertisement data while the device is in range counts as a new advertisement.
                  * Devices advertise many times a second, and each event crosses into user space, so signal
@@ -2024,6 +2028,7 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
                     goto done;
                 }
                 winebluetooth_device_free( device->device );
+                event.result = status;
             }
             if (event.result)
                 bluetooth_device_complete_gatt_irps( device, event.result );
@@ -2033,8 +2038,8 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
             goto done;
         }
     }
-    /* The device went away while connecting. */
-    complete_irp( event.irp, event.result ? event.result : STATUS_DEVICE_REMOVED );
+    /* The device went away while connecting. Its request queue is drained by remote_device_destroy.
+     * event.irp may also have completed on ServicesResolved already, so never complete it here. */
 done:
     LeaveCriticalSection( &device_list_cs );
     winebluetooth_device_free( event.device );
