@@ -1444,11 +1444,14 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
             {
                 BTH_DEVICE_INFO old_info = {0};
                 BLUETOOTH_ADDRESS adapter_addr;
+                winebluetooth_device_props_mask_t property_mask = event.changed_props_mask;
+                BOOL had_le_iface;
 
                 radio_obj = radio->device_obj;
                 adapter_addr = radio->props.address;
 
                 EnterCriticalSection( &device->props_cs );
+                had_le_iface = !!device->bthle_symlink_name.Buffer;
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &old_info );
 
                 device->props_mask |= event.changed_props_mask;
@@ -1497,7 +1500,9 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                 if (bluetooth_device_is_le( device->props_mask, &device->props ))
                     bluetooth_device_enable_le_iface( device );
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &device_new_info );
-                bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, device->props_mask );
+                /* A new LE interface needs its initial properties. RSSI updates need no registry writes. */
+                if (!had_le_iface && device->bthle_symlink_name.Buffer) property_mask = device->props_mask;
+                bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, property_mask );
                 if (device->props.connected && device->props.services_resolved)
                     bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
                 /* A failed Connect can emit Connected=false before or after its reply. Keep requests
