@@ -66,6 +66,9 @@ static DEVICE_OBJECT *bus_fdo, *bus_pdo, *device_auth;
     static CRITICAL_SECTION cs = { &cs##_debug, -1, 0, 0, 0, 0 };
 
 DECLARE_CRITICAL_SECTION( device_list_cs );
+/* Discovery calls wait for the event loop to dispatch a BlueZ reply. They must not hold
+ * device_list_cs, which that same loop needs when processing device property changes. */
+DECLARE_CRITICAL_SECTION( discovery_cs );
 
 static struct list device_list = LIST_INIT( device_list );
 
@@ -87,7 +90,7 @@ struct bluetooth_radio
 
     /* Guarded by device_list_cs */
     LIST_ENTRY irp_list;
-    LONG le_discovery_refs; /* Callers that have LE discovery running. Guarded by device_list_cs */
+    LONG le_discovery_refs; /* Callers that have LE discovery running. Guarded by discovery_cs */
 };
 
 struct bluetooth_remote_device
@@ -726,12 +729,12 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
             status = winebluetooth_radio_start_discovery( ext->radio, FALSE );
             break;
         }
-        EnterCriticalSection( &device_list_cs );
+        EnterCriticalSection( &discovery_cs );
         if (ext->le_discovery_refs++)
             status = STATUS_SUCCESS;
         else if ((status = winebluetooth_radio_start_discovery( ext->radio, TRUE )))
             ext->le_discovery_refs--;
-        LeaveCriticalSection( &device_list_cs );
+        LeaveCriticalSection( &discovery_cs );
         break;
     }
     case IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS:
@@ -770,12 +773,12 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
         break;
     }
     case IOCTL_WINEBTH_RADIO_STOP_DISCOVERY:
-        EnterCriticalSection( &device_list_cs );
+        EnterCriticalSection( &discovery_cs );
         if (ext->le_discovery_refs > 0 && --ext->le_discovery_refs)
             status = STATUS_SUCCESS;
         else
             status = winebluetooth_radio_stop_discovery( ext->radio );
-        LeaveCriticalSection( &device_list_cs );
+        LeaveCriticalSection( &discovery_cs );
         break;
     case IOCTL_WINEBTH_RADIO_SEND_AUTH_RESPONSE:
     {
