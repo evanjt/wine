@@ -551,7 +551,10 @@ static void free_parameter_object_data(struct d3dx_parameter *param, const void 
     if (param->class != D3DXPC_OBJECT)
         return;
 
-    count = min(param->element_count ? param->element_count : 1, bytes / sizeof(void *));
+    if (is_param_type_sampler(param->type))
+        count = 1;
+    else
+        count = min(param->element_count ? param->element_count : 1, bytes / sizeof(void *));
 
     for (i = 0; i < count; ++i)
     {
@@ -568,7 +571,7 @@ static void free_parameter_object_data(struct d3dx_parameter *param, const void 
             case D3DXPT_TEXTURECUBE:
             case D3DXPT_PIXELSHADER:
             case D3DXPT_VERTEXSHADER:
-                if (*(IUnknown **)data)
+                if (((IUnknown **)data)[i])
                     IUnknown_Release(((IUnknown **)data)[i]);
                 break;
 
@@ -6768,6 +6771,8 @@ HRESULT WINAPI D3DXCreateEffectEx(struct IDirect3DDevice9 *device, const void *s
             device, srcdata, srcdatalen, defines, include,
             skip_constants, flags, pool, effect, compilation_errors);
 
+    if (effect)
+        *effect = NULL;
     if (compilation_errors)
         *compilation_errors = NULL;
 
@@ -6790,6 +6795,7 @@ HRESULT WINAPI D3DXCreateEffectEx(struct IDirect3DDevice9 *device, const void *s
     if (FAILED(hr))
     {
         WARN("Failed to create effect object, hr %#lx.\n", hr);
+        free(object);
         return hr;
     }
 
