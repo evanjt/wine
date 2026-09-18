@@ -1179,6 +1179,355 @@ failed:
     return hr;
 }
 
+/* --- BluetoothLEAdvertisementReceivedEventArgs --- */
+
+struct received_args
+{
+    IBluetoothLEAdvertisementReceivedEventArgs IBluetoothLEAdvertisementReceivedEventArgs_iface;
+    IBluetoothLEAdvertisementReceivedEventArgs2 IBluetoothLEAdvertisementReceivedEventArgs2_iface;
+    LONG ref;
+    UINT64 address;
+    BluetoothAddressType address_type;
+    INT16 rssi;
+    BOOL has_tx_power;
+    INT16 tx_power;
+    DateTime timestamp;
+    IBluetoothLEAdvertisement *advertisement;
+};
+
+static inline struct received_args *impl_from_IBluetoothLEAdvertisementReceivedEventArgs( IBluetoothLEAdvertisementReceivedEventArgs *iface )
+{
+    return CONTAINING_RECORD( iface, struct received_args, IBluetoothLEAdvertisementReceivedEventArgs_iface );
+}
+
+static HRESULT WINAPI received_args_QueryInterface( IBluetoothLEAdvertisementReceivedEventArgs *iface, REFIID iid, void **out )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) ||
+        IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) ||
+        IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementReceivedEventArgs ))
+    {
+        IBluetoothLEAdvertisementReceivedEventArgs_AddRef(( *out = &impl->IBluetoothLEAdvertisementReceivedEventArgs_iface ));
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementReceivedEventArgs2 ))
+    {
+        IBluetoothLEAdvertisementReceivedEventArgs_AddRef( iface );
+        *out = &impl->IBluetoothLEAdvertisementReceivedEventArgs2_iface;
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI received_args_AddRef( IBluetoothLEAdvertisementReceivedEventArgs *iface )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI received_args_Release( IBluetoothLEAdvertisementReceivedEventArgs *iface )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+    if (!ref)
+    {
+        IBluetoothLEAdvertisement_Release( impl->advertisement );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT WINAPI received_args_GetIids( IBluetoothLEAdvertisementReceivedEventArgs *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI received_args_GetRuntimeClassName( IBluetoothLEAdvertisementReceivedEventArgs *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementReceivedEventArgs", class_name );
+}
+
+static HRESULT WINAPI received_args_GetTrustLevel( IBluetoothLEAdvertisementReceivedEventArgs *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args_get_RawSignalStrengthInDBm( IBluetoothLEAdvertisementReceivedEventArgs *iface, INT16 *value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->rssi;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args_get_BluetoothAddress( IBluetoothLEAdvertisementReceivedEventArgs *iface, UINT64 *value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->address;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args_get_AdvertisementType( IBluetoothLEAdvertisementReceivedEventArgs *iface,
+                                                           BluetoothLEAdvertisementType *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = BluetoothLEAdvertisementType_ConnectableUndirected;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args_get_Timestamp( IBluetoothLEAdvertisementReceivedEventArgs *iface, DateTime *value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->timestamp;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args_get_Advertisement( IBluetoothLEAdvertisementReceivedEventArgs *iface,
+                                                       IBluetoothLEAdvertisement **value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    IBluetoothLEAdvertisement_AddRef(( *value = impl->advertisement ));
+    return S_OK;
+}
+
+static const IBluetoothLEAdvertisementReceivedEventArgsVtbl received_args_vtbl =
+{
+    received_args_QueryInterface,
+    received_args_AddRef,
+    received_args_Release,
+    received_args_GetIids,
+    received_args_GetRuntimeClassName,
+    received_args_GetTrustLevel,
+    received_args_get_RawSignalStrengthInDBm,
+    received_args_get_BluetoothAddress,
+    received_args_get_AdvertisementType,
+    received_args_get_Timestamp,
+    received_args_get_Advertisement,
+};
+
+DEFINE_IINSPECTABLE( received_args2, IBluetoothLEAdvertisementReceivedEventArgs2, struct received_args,
+                     IBluetoothLEAdvertisementReceivedEventArgs_iface )
+
+static HRESULT WINAPI received_args2_get_BluetoothAddressType( IBluetoothLEAdvertisementReceivedEventArgs2 *iface,
+                                                               BluetoothAddressType *value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs2( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->address_type;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args2_get_TransmitPowerLevelInDBm( IBluetoothLEAdvertisementReceivedEventArgs2 *iface,
+                                                                  IReference_INT16 **value )
+{
+    struct received_args *impl = impl_from_IBluetoothLEAdvertisementReceivedEventArgs2( iface );
+    static const WCHAR class_name[] = L"Windows.Foundation.PropertyValue";
+    IPropertyValueStatics *statics;
+    IInspectable *boxed;
+    HSTRING_HEADER hdr;
+    HSTRING str;
+    HRESULT hr;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
+    *value = NULL;
+    if (!impl->has_tx_power) return S_OK;
+    if (FAILED((hr = WindowsCreateStringReference( class_name, ARRAY_SIZE( class_name ) - 1, &hdr, &str )))) return hr;
+    if (FAILED((hr = RoGetActivationFactory( str, &IID_IPropertyValueStatics, (void **)&statics )))) return hr;
+    hr = IPropertyValueStatics_CreateInt16( statics, impl->tx_power, &boxed );
+    IPropertyValueStatics_Release( statics );
+    if (FAILED(hr)) return hr;
+    hr = IInspectable_QueryInterface( boxed, &IID_IReference_INT16, (void **)value );
+    IInspectable_Release( boxed );
+    return hr;
+}
+
+static HRESULT WINAPI received_args2_get_IsAnonymous( IBluetoothLEAdvertisementReceivedEventArgs2 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args2_get_IsConnectable( IBluetoothLEAdvertisementReceivedEventArgs2 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = TRUE;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args2_get_IsScannable( IBluetoothLEAdvertisementReceivedEventArgs2 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = TRUE;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args2_get_IsDirected( IBluetoothLEAdvertisementReceivedEventArgs2 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static HRESULT WINAPI received_args2_get_IsScanResponse( IBluetoothLEAdvertisementReceivedEventArgs2 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static const IBluetoothLEAdvertisementReceivedEventArgs2Vtbl received_args2_vtbl =
+{
+    received_args2_QueryInterface,
+    received_args2_AddRef,
+    received_args2_Release,
+    received_args2_GetIids,
+    received_args2_GetRuntimeClassName,
+    received_args2_GetTrustLevel,
+    received_args2_get_BluetoothAddressType,
+    received_args2_get_TransmitPowerLevelInDBm,
+    received_args2_get_IsAnonymous,
+    received_args2_get_IsConnectable,
+    received_args2_get_IsScannable,
+    received_args2_get_IsDirected,
+    received_args2_get_IsScanResponse,
+};
+
+HRESULT received_args_create( const struct winebth_le_advertisement *adv,
+                              IBluetoothLEAdvertisementReceivedEventArgs **out )
+{
+    struct received_args *impl;
+    FILETIME now;
+    HRESULT hr;
+
+    if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
+    impl->IBluetoothLEAdvertisementReceivedEventArgs_iface.lpVtbl = &received_args_vtbl;
+    impl->IBluetoothLEAdvertisementReceivedEventArgs2_iface.lpVtbl = &received_args2_vtbl;
+    impl->ref = 1;
+    impl->address = adv->address;
+    impl->address_type = adv->flags & WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS ? BluetoothAddressType_Random
+                                                                        : BluetoothAddressType_Public;
+    impl->rssi = adv->flags & WINEBTH_LE_ADV_FLAG_RSSI ? adv->rssi : -127;
+    impl->has_tx_power = !!(adv->flags & WINEBTH_LE_ADV_FLAG_TX_POWER);
+    impl->tx_power = adv->tx_power;
+    GetSystemTimeAsFileTime( &now );
+    impl->timestamp.UniversalTime = ((UINT64)now.dwHighDateTime << 32) | now.dwLowDateTime;
+    if (FAILED((hr = advertisement_create( adv, &impl->advertisement ))))
+    {
+        free( impl );
+        return hr;
+    }
+    *out = &impl->IBluetoothLEAdvertisementReceivedEventArgs_iface;
+    return S_OK;
+}
+
+/* --- BluetoothLEAdvertisementWatcherStoppedEventArgs --- */
+
+struct stopped_args
+{
+    IBluetoothLEAdvertisementWatcherStoppedEventArgs IBluetoothLEAdvertisementWatcherStoppedEventArgs_iface;
+    LONG ref;
+    BluetoothError error;
+};
+
+static inline struct stopped_args *impl_from_IBluetoothLEAdvertisementWatcherStoppedEventArgs( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface )
+{
+    return CONTAINING_RECORD( iface, struct stopped_args, IBluetoothLEAdvertisementWatcherStoppedEventArgs_iface );
+}
+
+static HRESULT WINAPI stopped_args_QueryInterface( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface, REFIID iid, void **out )
+{
+    struct stopped_args *impl = impl_from_IBluetoothLEAdvertisementWatcherStoppedEventArgs( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) ||
+        IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) ||
+        IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementWatcherStoppedEventArgs ))
+    {
+        IBluetoothLEAdvertisementWatcherStoppedEventArgs_AddRef(( *out = &impl->IBluetoothLEAdvertisementWatcherStoppedEventArgs_iface ));
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI stopped_args_AddRef( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface )
+{
+    struct stopped_args *impl = impl_from_IBluetoothLEAdvertisementWatcherStoppedEventArgs( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI stopped_args_Release( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface )
+{
+    struct stopped_args *impl = impl_from_IBluetoothLEAdvertisementWatcherStoppedEventArgs( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+    if (!ref) free( impl );
+    return ref;
+}
+
+static HRESULT WINAPI stopped_args_GetIids( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI stopped_args_GetRuntimeClassName( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcherStoppedEventArgs", class_name );
+}
+
+static HRESULT WINAPI stopped_args_GetTrustLevel( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI stopped_args_get_Error( IBluetoothLEAdvertisementWatcherStoppedEventArgs *iface, BluetoothError *value )
+{
+    struct stopped_args *impl = impl_from_IBluetoothLEAdvertisementWatcherStoppedEventArgs( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->error;
+    return S_OK;
+}
+
+static const IBluetoothLEAdvertisementWatcherStoppedEventArgsVtbl stopped_args_vtbl =
+{
+    stopped_args_QueryInterface,
+    stopped_args_AddRef,
+    stopped_args_Release,
+    stopped_args_GetIids,
+    stopped_args_GetRuntimeClassName,
+    stopped_args_GetTrustLevel,
+    stopped_args_get_Error,
+};
+
+HRESULT stopped_args_create( BluetoothError error, IBluetoothLEAdvertisementWatcherStoppedEventArgs **out )
+{
+    struct stopped_args *impl;
+
+    if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
+    impl->IBluetoothLEAdvertisementWatcherStoppedEventArgs_iface.lpVtbl = &stopped_args_vtbl;
+    impl->ref = 1;
+    impl->error = error;
+    *out = &impl->IBluetoothLEAdvertisementWatcherStoppedEventArgs_iface;
+    return S_OK;
+}
+
 struct adv_watcher
 {
     IBluetoothLEAdvertisementWatcher IBluetoothLEAdvertisementWatcher_iface;
