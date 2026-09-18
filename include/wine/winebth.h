@@ -44,8 +44,14 @@
 /* Read the associated value for a GATT characteristic */
 #define IOCTL_WINEBTH_GATT_SERVICE_READ_CHARACTERISITIC_VALUE CTL_CODE(FILE_DEVICE_BLUETOOTH, 0xd0, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/* Get the last received LE advertisement for every remote device currently in range. */
+#define IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS CTL_CODE(FILE_DEVICE_BLUETOOTH, 0xe0, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 DEFINE_GUID( GUID_WINEBTH_AUTHENTICATION_REQUEST, 0xca67235f, 0xf621, 0x4c27, 0x85, 0x65, 0xa4,
              0xd5, 0x5e, 0xa1, 0x26, 0xe8 );
+/* Custom radio event raised whenever an LE advertisement is received from a remote device. The event data is a
+ * struct winebth_le_advertisement. */
+DEFINE_GUID( GUID_WINEBTH_LE_ADVERTISEMENT, 0x1c3b7a52, 0x9e4d, 0x4f0a, 0xb6, 0x2e, 0x5d, 0x0f, 0x3a, 0x71, 0xc9, 0x88 );
 
 #define WINEBTH_AUTH_DEVICE_PATH L"\\??\\WINEBTHAUTH"
 
@@ -105,6 +111,12 @@ struct winebth_le_advertisement
     struct winebth_le_manufacturer_data manufacturer_data[WINEBTH_LE_ADV_MAX_MANUFACTURER_DATA];
     UINT16 service_data_count;
     struct winebth_le_service_data service_data[WINEBTH_LE_ADV_MAX_SERVICE_DATA];
+};
+
+struct winebth_radio_get_le_advertisements_params
+{
+    ULONG count;
+    struct winebth_le_advertisement advertisements[1];
 };
 
 /* Associated data for GUID_WINEBTH_AUTHENTICATION_REQUEST events. */
