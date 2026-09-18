@@ -20,6 +20,8 @@
 #include "private.h"
 #include "roapi.h"
 #include "setupapi.h"
+#include "cfgmgr32.h"
+#include "bthdef.h"
 #include "initguid.h"
 #include "devpkey.h"
 #include "bthledef.h"
@@ -170,7 +172,91 @@ struct ble_device
     UINT64 addr;
     HANDLE device;
     LONG ref;
+
+    CRITICAL_SECTION cs;
+    HANDLE radio; /* Guarded by cs */
+    HCMNOTIFICATION notification; /* Guarded by cs */
+    struct
+    {
+        ITypedEventHandler_BluetoothLEDevice_IInspectable *handler;
+        INT64 token;
+    } *status_handlers; /* Guarded by cs */
+    UINT32 status_handler_count;
+    INT64 next_token;
 };
+
+/* Caller must hold impl->cs. */
+static HANDLE ble_device_get_radio( struct ble_device *impl )
+{
+    BLUETOOTH_FIND_RADIO_PARAMS params = { .dwSize = sizeof( params ) };
+    HBLUETOOTH_RADIO_FIND find;
+
+    if (impl->radio) return impl->radio;
+    if (!(find = BluetoothFindFirstRadio( &params, &impl->radio ))) return NULL;
+    BluetoothFindRadioClose( find );
+    return impl->radio;
+}
+
+static BOOL ble_device_is_connected( struct ble_device *impl )
+{
+    BLUETOOTH_DEVICE_INFO info = { .dwSize = sizeof( info ) };
+    HANDLE radio;
+    DWORD ret;
+
+    EnterCriticalSection( &impl->cs );
+    radio = ble_device_get_radio( impl );
+    LeaveCriticalSection( &impl->cs );
+    if (!radio) return FALSE;
+    info.Address.ullLong = impl->addr;
+    if ((ret = BluetoothGetDeviceInfo( radio, &info )))
+    {
+        WARN( "BluetoothGetDeviceInfo failed: %lu\n", ret );
+        return FALSE;
+    }
+    return info.fConnected;
+}
+
+static void ble_device_dispatch_status_changed( struct ble_device *impl )
+{
+    ITypedEventHandler_BluetoothLEDevice_IInspectable **handlers;
+    UINT32 i, count;
+
+    EnterCriticalSection( &impl->cs );
+    count = impl->status_handler_count;
+    if (!count || !(handlers = malloc( count * sizeof( *handlers ) )))
+    {
+        LeaveCriticalSection( &impl->cs );
+        return;
+    }
+    for (i = 0; i < count; i++)
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_AddRef(( handlers[i] = impl->status_handlers[i].handler ));
+    LeaveCriticalSection( &impl->cs );
+
+    for (i = 0; i < count; i++)
+    {
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_Invoke( handlers[i], &impl->IBluetoothLEDevice_iface, NULL );
+        ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( handlers[i] );
+    }
+    free( handlers );
+}
+
+static DWORD CALLBACK ble_device_notify_callback( HCMNOTIFICATION notify, void *ctx, CM_NOTIFY_ACTION action,
+                                                  CM_NOTIFY_EVENT_DATA *event_data, DWORD size )
+{
+    struct ble_device *impl = ctx;
+    const BTH_RADIO_IN_RANGE *in_range;
+
+    if (action != CM_NOTIFY_ACTION_DEVICECUSTOMEVENT) return ERROR_SUCCESS;
+    if (!IsEqualGUID( &event_data->u.DeviceHandle.EventGuid, &GUID_BLUETOOTH_RADIO_IN_RANGE )) return ERROR_SUCCESS;
+    if (event_data->u.DeviceHandle.DataSize < sizeof( *in_range )) return ERROR_SUCCESS;
+    in_range = (const BTH_RADIO_IN_RANGE *)event_data->u.DeviceHandle.Data;
+    if (in_range->deviceInfo.address != impl->addr) return ERROR_SUCCESS;
+    if (!((in_range->deviceInfo.flags ^ in_range->previousDeviceFlags) & BDIF_CONNECTED)) return ERROR_SUCCESS;
+
+    TRACE( "device %p connected %d\n", impl, !!(in_range->deviceInfo.flags & BDIF_CONNECTED) );
+    ble_device_dispatch_status_changed( impl );
+    return ERROR_SUCCESS;
+}
 
 static inline struct ble_device *impl_from_IBluetoothLEDevice( IBluetoothLEDevice *iface )
 {
@@ -208,12 +294,20 @@ static ULONG WINAPI ble_device_Release( IBluetoothLEDevice *iface )
 {
     struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
     ULONG ref = InterlockedDecrement( &impl->ref );
+    UINT32 i;
+
     TRACE( "(%p)\n", iface );
 
     if (!ref)
     {
-        WindowsDeleteString( impl->id );
+        if (impl->notification) CM_Unregister_Notification( impl->notification );
+        for (i = 0; i < impl->status_handler_count; i++)
+            ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( impl->status_handlers[i].handler );
+        free( impl->status_handlers );
+        if (impl->radio) CloseHandle( impl->radio );
         CloseHandle( impl->device );
+        WindowsDeleteString( impl->id );
+        DeleteCriticalSection( &impl->cs );
         free( impl );
     }
     return ref;
@@ -246,8 +340,19 @@ static HRESULT WINAPI ble_device_get_DeviceId( IBluetoothLEDevice *iface, HSTRIN
 
 static HRESULT WINAPI ble_device_get_Name( IBluetoothLEDevice *iface, HSTRING *value )
 {
-    FIXME( "(%p, %p): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    BLUETOOTH_DEVICE_INFO info = { .dwSize = sizeof( info ) };
+    HANDLE radio;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
+    EnterCriticalSection( &impl->cs );
+    radio = ble_device_get_radio( impl );
+    LeaveCriticalSection( &impl->cs );
+    info.Address.ullLong = impl->addr;
+    if (!radio || BluetoothGetDeviceInfo( radio, &info ))
+        return WindowsCreateString( NULL, 0, value );
+    return WindowsCreateString( info.szName, wcslen( info.szName ), value );
 }
 
 static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IVectorView_GattDeviceService **services )
@@ -308,8 +413,10 @@ done:
 
 static HRESULT WINAPI ble_device_get_ConnectionStatus( IBluetoothLEDevice *iface, BluetoothConnectionStatus *value )
 {
-    FIXME( "(%p, %p): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = ble_device_is_connected( impl ) ? BluetoothConnectionStatus_Connected : BluetoothConnectionStatus_Disconnected;
+    return S_OK;
 }
 
 static HRESULT WINAPI ble_device_get_BluetoothAddress( IBluetoothLEDevice *iface, UINT64 *value )
@@ -355,14 +462,56 @@ static HRESULT WINAPI ble_device_remove_GattServicesChanged( IBluetoothLEDevice 
 static HRESULT WINAPI ble_device_add_ConnectionStatusChanged( IBluetoothLEDevice *iface, ITypedEventHandler_BluetoothLEDevice_IInspectable *handler,
                                                               EventRegistrationToken *token )
 {
-    FIXME( "(%p, %p, %p): stub!\n", iface, handler, token );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    CM_NOTIFY_FILTER filter = { .cbSize = sizeof( filter ), .FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE };
+    void *tmp;
+
+    TRACE( "(%p, %p, %p)\n", iface, handler, token );
+
+    if (!handler) return E_INVALIDARG;
+    EnterCriticalSection( &impl->cs );
+    if (!(tmp = realloc( impl->status_handlers, (impl->status_handler_count + 1) * sizeof( *impl->status_handlers ) )))
+    {
+        LeaveCriticalSection( &impl->cs );
+        return E_OUTOFMEMORY;
+    }
+    impl->status_handlers = tmp;
+    ITypedEventHandler_BluetoothLEDevice_IInspectable_AddRef( handler );
+    impl->status_handlers[impl->status_handler_count].handler = handler;
+    impl->status_handlers[impl->status_handler_count].token = token->value = ++impl->next_token;
+    impl->status_handler_count++;
+    if (!impl->notification && ble_device_get_radio( impl ))
+    {
+        CONFIGRET ret;
+        filter.u.DeviceHandle.hTarget = impl->radio;
+        if ((ret = CM_Register_Notification( &filter, impl, ble_device_notify_callback, &impl->notification )))
+            ERR( "CM_Register_Notification failed: %#lx\n", ret );
+    }
+    LeaveCriticalSection( &impl->cs );
+    return S_OK;
 }
 
 static HRESULT WINAPI ble_device_remove_ConnectionStatusChanged( IBluetoothLEDevice *iface, EventRegistrationToken token )
 {
-    FIXME( "(%p, %I64d): stub!\n", iface, token.value );
-    return E_NOTIMPL;
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    ITypedEventHandler_BluetoothLEDevice_IInspectable *handler = NULL;
+    UINT32 i;
+
+    TRACE( "(%p, %I64x)\n", iface, token.value );
+
+    EnterCriticalSection( &impl->cs );
+    for (i = 0; i < impl->status_handler_count; i++)
+    {
+        if (impl->status_handlers[i].token != token.value) continue;
+        handler = impl->status_handlers[i].handler;
+        memmove( &impl->status_handlers[i], &impl->status_handlers[i + 1],
+                 (impl->status_handler_count - i - 1) * sizeof( *impl->status_handlers ) );
+        impl->status_handler_count--;
+        break;
+    }
+    LeaveCriticalSection( &impl->cs );
+    if (handler) ITypedEventHandler_BluetoothLEDevice_IInspectable_Release( handler );
+    return S_OK;
 }
 
 static const IBluetoothLEDeviceVtbl ble_device_vtbl = {
@@ -413,6 +562,7 @@ static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, 
     impl->ref = 1;
     impl->addr = addr;
     impl->IBluetoothLEDevice_iface.lpVtbl = &ble_device_vtbl;
+    InitializeCriticalSectionEx( &impl->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     *device = &impl->IBluetoothLEDevice_iface;
     return S_OK;
 }
