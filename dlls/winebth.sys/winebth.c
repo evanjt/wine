@@ -417,16 +417,16 @@ static NTSTATUS bluetooth_device_fill_gatt_services( struct bluetooth_remote_dev
     struct winebth_le_device_get_gatt_services_params *services = irp->AssociatedIrp.SystemBuffer;
     struct bluetooth_gatt_service *svc;
     NTSTATUS status = STATUS_SUCCESS;
-    SIZE_T rem;
+    SIZE_T capacity;
 
-    rem = (outsize - min_size)/sizeof( *services->services );
+    capacity = (outsize - min_size)/sizeof( *services->services );
     services->count = 0;
     LIST_FOR_EACH_ENTRY( svc, &ext->gatt_services, struct bluetooth_gatt_service, entry )
     {
         if (!svc->primary)
             continue;
         services->count++;
-        if (rem)
+        if (services->count <= capacity)
         {
             BTH_LE_GATT_SERVICE *info;
 
@@ -434,11 +434,10 @@ static NTSTATUS bluetooth_device_fill_gatt_services( struct bluetooth_remote_dev
             memset( info, 0, sizeof( *info ) );
             uuid_to_le( &svc->uuid, &info->ServiceUuid );
             info->AttributeHandle = svc->handle;
-            rem--;
         }
     }
     irp->IoStatus.Information = offsetof( struct winebth_le_device_get_gatt_services_params, services[services->count] );
-    if (services->count > rem)
+    if (services->count > capacity)
         status = STATUS_MORE_ENTRIES;
     return status;
 }
