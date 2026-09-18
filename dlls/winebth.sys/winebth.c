@@ -553,6 +553,8 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
 static void bluetooth_device_fill_le_advertisement( struct bluetooth_remote_device *device,
                                                     struct winebth_le_advertisement *adv );
 
+static BOOL bluetooth_radio_check_power( struct bluetooth_radio *radio );
+
 static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetooth_radio *ext, IRP *irp )
 {
     IO_STACK_LOCATION *stack = IoGetCurrentIrpStackLocation( irp );
@@ -722,6 +724,14 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
         const struct winebth_radio_start_discovery_params *params = irp->AssociatedIrp.SystemBuffer;
         BOOL le = params && insize >= sizeof( *params ) && params->le;
 
+        EnterCriticalSection( &device_list_cs );
+        if (bluetooth_radio_check_power( ext ))
+        {
+            LeaveCriticalSection( &device_list_cs );
+            status = STATUS_DEVICE_NOT_READY;
+            break;
+        }
+        LeaveCriticalSection( &device_list_cs );
         /* Several LE watchers may run at once. BlueZ keeps one discovery session per client, so only the
          * first start and the last stop reach it. */
         if (!le)
@@ -1086,6 +1096,7 @@ static void add_bluetooth_radio( struct winebluetooth_watcher_event_radio_added 
     InitializeListHead( &ext->radio.irp_list );
 
     list_add_tail( &device_list, &ext->radio.entry );
+    bluetooth_radio_check_power( &ext->radio );
     LeaveCriticalSection( &device_list_cs );
 
     IoInvalidateDeviceRelations( bus_pdo, BusRelations );
@@ -1115,6 +1126,20 @@ static void remove_bluetooth_radio( winebluetooth_radio_t radio )
 static void bluetooth_radio_set_properties( DEVICE_OBJECT *obj,
                                             winebluetooth_radio_props_mask_t mask,
                                             struct winebluetooth_radio_properties *props );
+
+/* Whether the radio is known to be off, with the fix in the log. Caller must hold device_list_cs. */
+static BOOL bluetooth_radio_check_power( struct bluetooth_radio *radio )
+{
+    if (!(radio->props_mask & WINEBLUETOOTH_RADIO_PROPERTY_POWERED) || radio->props.powered)
+        return FALSE;
+    if (!strcmp( radio->props.power_state, "off-blocked" ))
+        ERR( "Bluetooth adapter %s is blocked by rfkill, no sensor will be found. Run: rfkill unblock bluetooth\n",
+             debugstr_w( radio->hw_name ) );
+    else
+        ERR( "Bluetooth adapter %s is powered off, no sensor will be found. Run: bluetoothctl power on\n",
+             debugstr_w( radio->hw_name ) );
+    return TRUE;
+}
 
 static void update_bluetooth_radio_properties( struct winebluetooth_watcher_event_radio_props_changed event )
 {
@@ -1147,6 +1172,14 @@ static void update_bluetooth_radio_properties( struct winebluetooth_watcher_even
                 device->props.discovering = event.props.discovering;
             if (event.changed_props_mask & WINEBLUETOOTH_RADIO_PROPERTY_PAIRABLE)
                 device->props.pairable = event.props.pairable;
+            if (event.changed_props_mask & WINEBLUETOOTH_RADIO_PROPERTY_POWER_STATE)
+                memcpy( device->props.power_state, event.props.power_state, sizeof( event.props.power_state ) );
+            if (event.changed_props_mask & WINEBLUETOOTH_RADIO_PROPERTY_POWERED)
+            {
+                device->props.powered = event.props.powered;
+                if (!bluetooth_radio_check_power( device ))
+                    TRACE( "Bluetooth adapter %s is powered on\n", debugstr_w( device->hw_name ) );
+            }
             if (device->started)
                 bluetooth_radio_set_properties( device->device_obj, device->props_mask,
                                                 &device->props );
