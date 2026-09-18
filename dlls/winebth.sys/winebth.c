@@ -126,6 +126,7 @@ struct bluetooth_gatt_service
     winebluetooth_gatt_service_t service;
     GUID uuid;
     unsigned int primary : 1;
+    unsigned int started : 1; /* PnP has started the PDO, so its device interface exists. Guarded by remote_device->props_cs */
     UINT16 handle;
     UNICODE_STRING service_symlink_name;
 
@@ -442,6 +443,18 @@ static NTSTATUS bluetooth_device_fill_gatt_services( struct bluetooth_remote_dev
     return status;
 }
 
+/* Whether a GATT services request can be answered. Every service PDO must have started, or a client that
+ * subscribes as soon as the list arrives finds no device node to open. Caller must hold ext->props_cs. */
+static BOOL bluetooth_device_gatt_services_ready( struct bluetooth_remote_device *ext )
+{
+    struct bluetooth_gatt_service *svc;
+
+    if (!ext->props.connected || !ext->props.services_resolved) return FALSE;
+    LIST_FOR_EACH_ENTRY( svc, &ext->gatt_services, struct bluetooth_gatt_service, entry )
+        if (!svc->started) return FALSE;
+    return TRUE;
+}
+
 /* Complete every pending GATT service request for the device. Caller must hold ext->props_cs. */
 static void bluetooth_device_complete_gatt_irps( struct bluetooth_remote_device *ext, NTSTATUS status )
 {
@@ -487,12 +500,12 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
             break;
         }
         EnterCriticalSection( &ext->props_cs );
-        if (ext->props.connected && ext->props.services_resolved)
+        if (bluetooth_device_gatt_services_ready( ext ))
             status = bluetooth_device_fill_gatt_services( ext, irp );
         else
         {
             /* Windows connects on demand when services are requested. Keep the request pending until BlueZ
-             * has resolved the device's services. */
+             * has resolved the device's services and PnP has started every service PDO. */
             status = STATUS_PENDING;
             if (!ext->props.connected && !ext->connecting)
             {
@@ -1543,7 +1556,7 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                 /* A new LE interface needs its initial properties. RSSI updates need no registry writes. */
                 if (!had_le_iface && device->bthle_symlink_name.Buffer) property_mask = device->props_mask;
                 bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, property_mask );
-                if (device->props.connected && device->props.services_resolved)
+                if (bluetooth_device_gatt_services_ready( device ))
                     bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
                 /* A failed Connect can emit Connected=false before or after its reply. Keep requests
                  * queued while Connect (including a retry) owns them, so this signal cannot abort it. */
@@ -1765,6 +1778,8 @@ static void bluetooth_gatt_service_remove( winebluetooth_gatt_service_t service 
                     svc->removed = 1;
                     if (device->started)
                         IoInvalidateDeviceRelations( device->device_obj, BusRelations );
+                    if (bluetooth_device_gatt_services_ready( device ))
+                        bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
                     LeaveCriticalSection( &device->props_cs );
                     LeaveCriticalSection( &device_list_cs );
                     winebluetooth_gatt_service_free( service );
@@ -2095,7 +2110,7 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
             }
             if (event.result)
                 bluetooth_device_complete_gatt_irps( device, event.result );
-            else if (device->props.connected && device->props.services_resolved)
+            else if (bluetooth_device_gatt_services_ready( device ))
                 bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
             /* The application may have given up and closed the device while Connect was pending. */
             drop = bluetooth_device_unowned( device );
@@ -2480,6 +2495,12 @@ static NTSTATUS WINAPI gatt_service_pdo_pnp( DEVICE_OBJECT *device_obj, struct b
                                  sizeof( addr_str ), addr_str );
         IoSetDevicePropertyData( device_obj, &DEVPKEY_Bluetooth_ServiceGUID, LOCALE_NEUTRAL, 0, DEVPROP_TYPE_GUID,
                                  sizeof( ext->uuid ), &ext->uuid );
+        /* The interface exists now, so a services request held back for this PDO can be answered. */
+        EnterCriticalSection( &ext->remote_device->props_cs );
+        ext->started = TRUE;
+        if (bluetooth_device_gatt_services_ready( ext->remote_device ))
+            bluetooth_device_complete_gatt_irps( ext->remote_device, STATUS_SUCCESS );
+        LeaveCriticalSection( &ext->remote_device->props_cs );
         ret = STATUS_SUCCESS;
         break;
     }
