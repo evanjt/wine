@@ -87,6 +87,7 @@ struct bluetooth_radio
 
     /* Guarded by device_list_cs */
     LIST_ENTRY irp_list;
+    LONG le_discovery_refs; /* Callers that have LE discovery running. Guarded by device_list_cs */
 };
 
 struct bluetooth_remote_device
@@ -713,7 +714,20 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
     {
         const struct winebth_radio_start_discovery_params *params = irp->AssociatedIrp.SystemBuffer;
         BOOL le = params && insize >= sizeof( *params ) && params->le;
-        status = winebluetooth_radio_start_discovery( ext->radio, le );
+
+        /* Several LE watchers may run at once. BlueZ keeps one discovery session per client, so only the
+         * first start and the last stop reach it. */
+        if (!le)
+        {
+            status = winebluetooth_radio_start_discovery( ext->radio, FALSE );
+            break;
+        }
+        EnterCriticalSection( &device_list_cs );
+        if (ext->le_discovery_refs++)
+            status = STATUS_SUCCESS;
+        else if ((status = winebluetooth_radio_start_discovery( ext->radio, TRUE )))
+            ext->le_discovery_refs--;
+        LeaveCriticalSection( &device_list_cs );
         break;
     }
     case IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS:
@@ -752,7 +766,12 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
         break;
     }
     case IOCTL_WINEBTH_RADIO_STOP_DISCOVERY:
-        status = winebluetooth_radio_stop_discovery( ext->radio );
+        EnterCriticalSection( &device_list_cs );
+        if (ext->le_discovery_refs > 0 && --ext->le_discovery_refs)
+            status = STATUS_SUCCESS;
+        else
+            status = winebluetooth_radio_stop_discovery( ext->radio );
+        LeaveCriticalSection( &device_list_cs );
         break;
     case IOCTL_WINEBTH_RADIO_SEND_AUTH_RESPONSE:
     {
