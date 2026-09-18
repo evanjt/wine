@@ -523,6 +523,68 @@ HRESULT async_operation_inspectable_create( const GUID *iid, IUnknown *invoker, 
     return S_OK;
 }
 
+/* IAsyncOperation<T> for enumeration results, which share the IInspectable vtable layout. */
+
+static HRESULT WINAPI async_uint32_GetRuntimeClassName( IAsyncOperation_IInspectable *iface, HSTRING *class_name )
+{
+    return WindowsCreateString( L"Windows.Foundation.IAsyncOperation`1<UInt32>",
+                                ARRAY_SIZE(L"Windows.Foundation.IAsyncOperation`1<UInt32>"),
+                                class_name );
+}
+
+static HRESULT WINAPI async_uint32_GetResults( IAsyncOperation_IInspectable *iface, UINT32 *results )
+{
+    struct async_inspectable *impl = impl_from_IAsyncOperation_IInspectable( iface );
+    PROPVARIANT result = {.vt = VT_UI4};
+    HRESULT hr;
+
+    TRACE( "iface %p, results %p.\n", iface, results );
+
+    if (SUCCEEDED(hr = IAsyncInfoImpl_get_Result( impl->IAsyncInfoImpl_inner, &result )))
+    {
+        *results = result.ulVal;
+        PropVariantClear( &result );
+    }
+    return hr;
+}
+
+static const struct IAsyncOperation_IInspectableVtbl async_uint32_vtbl =
+{
+    async_inspectable_QueryInterface,
+    async_inspectable_AddRef,
+    async_inspectable_Release,
+    async_inspectable_GetIids,
+    async_uint32_GetRuntimeClassName,
+    async_inspectable_GetTrustLevel,
+    async_inspectable_put_Completed,
+    async_inspectable_get_Completed,
+    (void *)async_uint32_GetResults,
+};
+
+HRESULT async_operation_uint32_create( const GUID *iid, IUnknown *invoker, IUnknown *param, async_operation_callback callback,
+                                       IAsyncOperation_IInspectable **out )
+{
+    struct async_inspectable *impl;
+    HRESULT hr;
+
+    *out = NULL;
+    if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
+    impl->IAsyncOperation_IInspectable_iface.lpVtbl = &async_uint32_vtbl;
+    impl->ref = 1;
+    impl->iid = iid;
+
+    if (FAILED(hr = async_info_create( invoker, param, callback, (IInspectable *)&impl->IAsyncOperation_IInspectable_iface, &impl->IAsyncInfoImpl_inner )) ||
+        FAILED(hr = IAsyncInfoImpl_Start( impl->IAsyncInfoImpl_inner )))
+    {
+        if (impl->IAsyncInfoImpl_inner) IAsyncInfoImpl_Release( impl->IAsyncInfoImpl_inner );
+        free( impl );
+        return hr;
+    }
+
+    *out = &impl->IAsyncOperation_IInspectable_iface;
+    return S_OK;
+}
+
 struct async_action
 {
     IAsyncAction IAsyncAction_iface;

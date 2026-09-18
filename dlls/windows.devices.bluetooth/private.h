@@ -79,6 +79,9 @@ HRESULT advertisement_create( const struct winebth_le_advertisement *adv, IBluet
 HRESULT received_args_create( const struct winebth_le_advertisement *adv, IBluetoothLEAdvertisementReceivedEventArgs **out );
 HRESULT stopped_args_create( BluetoothError error, IBluetoothLEAdvertisementWatcherStoppedEventArgs **out );
 
+HRESULT async_operation_uint32_create( const GUID *iid, IUnknown *invoker, IUnknown *param,
+                                       async_operation_callback callback, IAsyncOperation_IInspectable **out );
+
 HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out );
 HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
 HRESULT class_name_string( const WCHAR *name, HSTRING *out );
