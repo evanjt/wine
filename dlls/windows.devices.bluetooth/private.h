@@ -87,6 +87,7 @@ HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
 HRESULT class_name_string( const WCHAR *name, HSTRING *out );
 
 HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
+HRESULT gatt_session_create( IBluetoothDeviceId *id, IGattSession **session );
 HRESULT bluetoothdeviceid_create( HSTRING id, IBluetoothDeviceId **out );
 HRESULT gatt_device_services_result_create( IVector_IInspectable *services, IGattDeviceServicesResult **out );
 HRESULT read_result_create( GattCommunicationStatus status, IBuffer *value, IGattReadResult **out );
@@ -94,6 +95,7 @@ HRESULT write_result_create( GattCommunicationStatus status, IGattWriteResult **
 HRESULT characteristics_result_create( GattCommunicationStatus status, IVector_IInspectable *vector, IGattCharacteristicsResult **out );
 HRESULT value_changed_args_create( const BYTE *data, UINT32 size, IGattValueChangedEventArgs **out );
 
+extern IActivationFactory *gattsession_statics_factory;
 extern IActivationFactory *bluetoothdeviceid_statics_factory;
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \

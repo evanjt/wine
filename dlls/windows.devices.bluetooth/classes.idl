@@ -40,6 +40,10 @@ namespace Windows.Devices.Bluetooth {
     runtimeclass BluetoothLEDevice;
     runtimeclass BluetoothDeviceId;
 }
+
+namespace Windows.Devices.Bluetooth.GenericAttributeProfile {
+    runtimeclass GattSession;
+}
 namespace Windows.Devices.Bluetooth.Advertisement {
     runtimeclass BluetoothLEAdvertisementWatcher;
 }
