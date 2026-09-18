@@ -94,7 +94,7 @@ HRESULT gatt_session_create( IBluetoothDeviceId *id, IGattSession **session );
 HRESULT bluetoothdeviceid_create( HSTRING id, IBluetoothDeviceId **out );
 HRESULT gatt_device_services_result_create( IVector_IInspectable *services, IGattDeviceServicesResult **out );
 HRESULT read_result_create( GattCommunicationStatus status, IBuffer *value, IGattReadResult **out );
-HRESULT write_result_create( GattCommunicationStatus status, IGattWriteResult **out );
+HRESULT write_result_create( GattCommunicationStatus status, BYTE protocol_error, IGattWriteResult **out );
 HRESULT characteristics_result_create( GattCommunicationStatus status, IVector_IInspectable *vector, IGattCharacteristicsResult **out );
 HRESULT value_changed_args_create( const BYTE *data, UINT32 size, IGattValueChangedEventArgs **out );
 HRESULT ble_device_get_services_vector( IBluetoothLEDevice *device, const GUID *uuid, IVector_IInspectable **vector );

@@ -168,6 +168,39 @@ static HRESULT box_uint32( UINT32 value, IInspectable **out )
     return hr;
 }
 
+static HRESULT box_byte( BYTE value, IReference_BYTE **out )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Foundation_PropertyValue;
+    IPropertyValueStatics *statics;
+    IInspectable *boxed;
+    HSTRING_HEADER hdr;
+    HSTRING str;
+    HRESULT hr;
+
+    if (FAILED((hr = WindowsCreateStringReference( class_name, wcslen( class_name ), &hdr, &str )))) return hr;
+    if (FAILED((hr = RoGetActivationFactory( str, &IID_IPropertyValueStatics, (void **)&statics )))) return hr;
+    hr = IPropertyValueStatics_CreateUInt8( statics, value, &boxed );
+    IPropertyValueStatics_Release( statics );
+    if (FAILED(hr)) return hr;
+    hr = IInspectable_QueryInterface( boxed, &IID_IReference_BYTE, (void **)out );
+    IInspectable_Release( boxed );
+    return hr;
+}
+
+/* The status Windows reports for a failed GATT call, with the ATT error byte when the device answered one.
+ * The driver completes such calls with STATUS_BTH_ATT_<code>, which ntdll hands out as E_BLUETOOTH_ATT_<code>. */
+static GattCommunicationStatus gatt_status_from_error( DWORD err, BYTE *protocol_error )
+{
+    *protocol_error = 0;
+    if (FAILED(err) && HRESULT_FACILITY( err ) == FACILITY_BLUETOOTH_ATT)
+    {
+        *protocol_error = err & 0xff;
+        return GattCommunicationStatus_ProtocolError;
+    }
+    if (err == ERROR_PRIVILEGE_NOT_HELD || err == ERROR_ACCESS_DENIED) return GattCommunicationStatus_AccessDenied;
+    return GattCommunicationStatus_Unreachable;
+}
+
 static HRESULT unbox_guid( IUnknown *param, GUID *uuid )
 {
     IPropertyValue *value;
@@ -327,6 +360,7 @@ struct write_result
     IGattWriteResult IGattWriteResult_iface;
     LONG ref;
     GattCommunicationStatus status;
+    BYTE protocol_error;
 };
 
 DEFINE_SIMPLE_INSPECTABLE( write_result, IGattWriteResult, struct write_result,
@@ -342,9 +376,11 @@ static HRESULT WINAPI write_result_get_Status( IGattWriteResult *iface, GattComm
 
 static HRESULT WINAPI write_result_get_ProtocolError( IGattWriteResult *iface, IReference_BYTE **value )
 {
+    struct write_result *impl = impl_from_IGattWriteResult( iface );
     TRACE( "(%p, %p)\n", iface, value );
     *value = NULL;
-    return S_OK;
+    if (impl->status != GattCommunicationStatus_ProtocolError) return S_OK;
+    return box_byte( impl->protocol_error, value );
 }
 
 static const IGattWriteResultVtbl write_result_vtbl =
@@ -359,7 +395,7 @@ static const IGattWriteResultVtbl write_result_vtbl =
     write_result_get_ProtocolError,
 };
 
-HRESULT write_result_create( GattCommunicationStatus status, IGattWriteResult **out )
+HRESULT write_result_create( GattCommunicationStatus status, BYTE protocol_error, IGattWriteResult **out )
 {
     struct write_result *impl;
 
@@ -367,6 +403,7 @@ HRESULT write_result_create( GattCommunicationStatus status, IGattWriteResult **
     impl->IGattWriteResult_iface.lpVtbl = &write_result_vtbl;
     impl->ref = 1;
     impl->status = status;
+    impl->protocol_error = protocol_error;
     *out = &impl->IGattWriteResult_iface;
     return S_OK;
 }
@@ -2317,14 +2354,18 @@ static HRESULT gatt_characteristic_read_async( IUnknown *invoker, IUnknown *para
     IGattReadResult *read_result;
     IBuffer *buffer;
     UINT32 mode = BluetoothCacheMode_Uncached;
+    GattCommunicationStatus status;
     HRESULT hr;
 
     if (param) unbox_uint32( param, &mode );
     hr = gatt_characteristic_read( impl, mode == BluetoothCacheMode_Cached ? BLUETOOTH_GATT_FLAG_FORCE_READ_FROM_CACHE
                                                                            : BLUETOOTH_GATT_FLAG_FORCE_READ_FROM_DEVICE, &buffer );
     if (FAILED(hr)) WARN( "Read failed: %#lx\n", hr );
-    hr = read_result_create( SUCCEEDED(hr) ? GattCommunicationStatus_Success : GattCommunicationStatus_Unreachable, buffer,
-                             &read_result );
+    if (SUCCEEDED(hr)) status = GattCommunicationStatus_Success;
+    else if (HRESULT_FACILITY( hr ) == FACILITY_BLUETOOTH_ATT) status = GattCommunicationStatus_ProtocolError;
+    else if (hr == HRESULT_FROM_WIN32( ERROR_INVALID_ACCESS ) || hr == E_ACCESSDENIED) status = GattCommunicationStatus_AccessDenied;
+    else status = GattCommunicationStatus_Unreachable;
+    hr = read_result_create( status, buffer, &read_result );
     if (buffer) IBuffer_Release( buffer );
     if (FAILED(hr)) return hr;
     return async_result_object( result, (IUnknown *)read_result );
@@ -2354,7 +2395,7 @@ static HRESULT WINAPI gatt_characteristic_ReadValueWithCacheModeAsync( IGattChar
 
 /* Perform a write or notification change synchronously through the driver. */
 static GattCommunicationStatus gatt_characteristic_perform_write( struct gatt_characteristic *impl,
-                                                                  struct gatt_write_request *request )
+                                                                  struct gatt_write_request *request, BYTE *protocol_error )
 {
     struct winebth_gatt_service_write_characteristic_value_params *params = NULL;
     struct winebth_gatt_service_set_characteristic_notify_params notify_params = {0};
@@ -2365,6 +2406,7 @@ static GattCommunicationStatus gatt_characteristic_perform_write( struct gatt_ch
     HANDLE service;
     BOOL ret;
 
+    *protocol_error = 0;
     if ((service = gatt_service_get_handle( impl->service )) == INVALID_HANDLE_VALUE)
         return GattCommunicationStatus_Unreachable;
 
@@ -2411,9 +2453,9 @@ static GattCommunicationStatus gatt_characteristic_perform_write( struct gatt_ch
 
     if (err)
     {
-        WARN( "GATT operation %#lx failed: %lu\n", code, err );
-        return err == ERROR_PRIVILEGE_NOT_HELD || err == ERROR_ACCESS_DENIED ? GattCommunicationStatus_AccessDenied
-                                                                              : GattCommunicationStatus_Unreachable;
+        GattCommunicationStatus status = gatt_status_from_error( err, protocol_error );
+        WARN( "GATT operation %#lx failed: %lu, status %d protocol error %#x\n", code, err, status, *protocol_error );
+        return status;
     }
     return GattCommunicationStatus_Success;
 }
@@ -2423,14 +2465,15 @@ static HRESULT gatt_characteristic_write_async( IUnknown *invoker, IUnknown *par
     struct gatt_characteristic *impl = impl_from_IGattCharacteristic( (IGattCharacteristic *)invoker );
     struct gatt_write_request *request = impl_from_write_request( param );
     GattCommunicationStatus status;
+    BYTE protocol_error = 0;
 
-    status = gatt_characteristic_perform_write( impl, request );
+    status = gatt_characteristic_perform_write( impl, request, &protocol_error );
     if (request->with_result)
     {
         IGattWriteResult *write_result;
         HRESULT hr;
 
-        if (FAILED((hr = write_result_create( status, &write_result )))) return hr;
+        if (FAILED((hr = write_result_create( status, protocol_error, &write_result )))) return hr;
         return async_result_object( result, (IUnknown *)write_result );
     }
     return async_result_uint32( result, status );
