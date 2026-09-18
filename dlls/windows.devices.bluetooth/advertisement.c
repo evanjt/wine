@@ -1615,7 +1615,8 @@ static HRESULT event_handlers_add( struct adv_watcher *impl, struct event_handle
         handlers->capacity = capacity;
     }
     entry = &handlers->entries[handlers->count++];
-    IUnknown_AddRef(( entry->handler = handler ));
+    entry->handler = handler;
+    IUnknown_AddRef( handler );
     entry->token = token->value = ++impl->next_token;
     LeaveCriticalSection( &impl->cs );
     return S_OK;
@@ -1653,7 +1654,10 @@ static UINT32 event_handlers_snapshot( struct adv_watcher *impl, struct event_ha
         return 0;
     }
     for (i = 0; i < count; i++)
-        IUnknown_AddRef(( (*out)[i] = handlers->entries[i].handler ));
+    {
+        (*out)[i] = handlers->entries[i].handler;
+        IUnknown_AddRef( (*out)[i] );
+    }
     LeaveCriticalSection( &impl->cs );
     return count;
 }
