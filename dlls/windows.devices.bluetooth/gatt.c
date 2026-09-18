@@ -391,6 +391,178 @@ HRESULT value_changed_args_create( const BYTE *data, UINT32 size, IGattValueChan
     return S_OK;
 }
 
+/* --- BluetoothDeviceId --- */
+
+struct device_id
+{
+    IBluetoothDeviceId IBluetoothDeviceId_iface;
+    LONG ref;
+    HSTRING id;
+};
+
+DEFINE_SIMPLE_INSPECTABLE( device_id, IBluetoothDeviceId, struct device_id, L"Windows.Devices.Bluetooth.BluetoothDeviceId",
+                           WindowsDeleteString( impl->id ) )
+
+static HRESULT WINAPI device_id_get_Id( IBluetoothDeviceId *iface, HSTRING *value )
+{
+    struct device_id *impl = impl_from_IBluetoothDeviceId( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    return WindowsDuplicateString( impl->id, value );
+}
+
+static HRESULT WINAPI device_id_get_IsClassicDevice( IBluetoothDeviceId *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_id_get_IsLowEnergyDevice( IBluetoothDeviceId *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = TRUE;
+    return S_OK;
+}
+
+static const IBluetoothDeviceIdVtbl device_id_vtbl =
+{
+    device_id_QueryInterface,
+    device_id_AddRef,
+    device_id_Release,
+    device_id_GetIids,
+    device_id_GetRuntimeClassName,
+    device_id_GetTrustLevel,
+    device_id_get_Id,
+    device_id_get_IsClassicDevice,
+    device_id_get_IsLowEnergyDevice,
+};
+
+HRESULT bluetoothdeviceid_create( HSTRING id, IBluetoothDeviceId **out )
+{
+    struct device_id *impl;
+    HRESULT hr;
+
+    if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
+    impl->IBluetoothDeviceId_iface.lpVtbl = &device_id_vtbl;
+    impl->ref = 1;
+    if (FAILED((hr = WindowsDuplicateString( id, &impl->id ))))
+    {
+        free( impl );
+        return hr;
+    }
+    *out = &impl->IBluetoothDeviceId_iface;
+    return S_OK;
+}
+
+struct device_id_statics
+{
+    IActivationFactory IActivationFactory_iface;
+    IBluetoothDeviceIdStatics IBluetoothDeviceIdStatics_iface;
+    LONG ref;
+};
+
+static inline struct device_id_statics *device_id_statics_from_IActivationFactory( IActivationFactory *iface )
+{
+    return CONTAINING_RECORD( iface, struct device_id_statics, IActivationFactory_iface );
+}
+
+static HRESULT WINAPI device_id_factory_QueryInterface( IActivationFactory *iface, REFIID iid, void **out )
+{
+    struct device_id_statics *impl = device_id_statics_from_IActivationFactory( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
+    {
+        IActivationFactory_AddRef(( *out = &impl->IActivationFactory_iface ));
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothDeviceIdStatics ))
+    {
+        IActivationFactory_AddRef( iface );
+        *out = &impl->IBluetoothDeviceIdStatics_iface;
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI device_id_factory_AddRef( IActivationFactory *iface )
+{
+    struct device_id_statics *impl = device_id_statics_from_IActivationFactory( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI device_id_factory_Release( IActivationFactory *iface )
+{
+    struct device_id_statics *impl = device_id_statics_from_IActivationFactory( iface );
+    return InterlockedDecrement( &impl->ref );
+}
+
+static HRESULT WINAPI device_id_factory_GetIids( IActivationFactory *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI device_id_factory_GetRuntimeClassName( IActivationFactory *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.BluetoothDeviceId", class_name );
+}
+
+static HRESULT WINAPI device_id_factory_GetTrustLevel( IActivationFactory *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_id_factory_ActivateInstance( IActivationFactory *iface, IInspectable **instance )
+{
+    FIXME( "(%p, %p): stub!\n", iface, instance );
+    return E_NOTIMPL;
+}
+
+static const struct IActivationFactoryVtbl device_id_factory_vtbl =
+{
+    device_id_factory_QueryInterface,
+    device_id_factory_AddRef,
+    device_id_factory_Release,
+    device_id_factory_GetIids,
+    device_id_factory_GetRuntimeClassName,
+    device_id_factory_GetTrustLevel,
+    device_id_factory_ActivateInstance,
+};
+
+DEFINE_IINSPECTABLE( device_id_statics, IBluetoothDeviceIdStatics, struct device_id_statics, IActivationFactory_iface )
+
+static HRESULT WINAPI device_id_statics_FromId( IBluetoothDeviceIdStatics *iface, HSTRING id, IBluetoothDeviceId **result )
+{
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_hstring( id ), result );
+    return bluetoothdeviceid_create( id, result );
+}
+
+static const IBluetoothDeviceIdStaticsVtbl device_id_statics_vtbl =
+{
+    device_id_statics_QueryInterface,
+    device_id_statics_AddRef,
+    device_id_statics_Release,
+    device_id_statics_GetIids,
+    device_id_statics_GetRuntimeClassName,
+    device_id_statics_GetTrustLevel,
+    device_id_statics_FromId,
+};
+
+static struct device_id_statics device_id_statics =
+{
+    {&device_id_factory_vtbl},
+    {&device_id_statics_vtbl},
+    1
+};
+
+IActivationFactory *bluetoothdeviceid_statics_factory = &device_id_statics.IActivationFactory_iface;
+
 struct gatt_service
 {
     IGattDeviceService IGattDeviceService_iface;

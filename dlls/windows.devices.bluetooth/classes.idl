@@ -38,6 +38,7 @@ namespace Windows.Devices.Bluetooth {
     runtimeclass BluetoothAdapter;
     runtimeclass BluetoothDevice;
     runtimeclass BluetoothLEDevice;
+    runtimeclass BluetoothDeviceId;
 }
 namespace Windows.Devices.Bluetooth.Advertisement {
     runtimeclass BluetoothLEAdvertisementWatcher;
