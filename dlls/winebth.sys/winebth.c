@@ -112,6 +112,7 @@ struct bluetooth_remote_device
     LIST_ENTRY gatt_irp_list; /* GATT service requests waiting for a connection. Guarded by props_cs */
     BOOL connecting; /* A BlueZ Connect call is in flight. Guarded by props_cs */
     unsigned int connect_attempts; /* Guarded by props_cs */
+    LONG open_handles; /* Handles on this device and its GATT services. Guarded by props_cs */
     ULONGLONG last_adv_report; /* Tick count of the last advertisement event. Guarded by props_cs */
 };
 
@@ -2043,9 +2044,16 @@ static void bluetooth_gatt_operation_complete_irp( struct winebluetooth_watcher_
     LeaveCriticalSection( &ext->gatt_service.chars_cs );
 }
 
+/* Whether the link has no owner left: every client closed and no Connect is in flight. Caller must hold props_cs. */
+static BOOL bluetooth_device_unowned( struct bluetooth_remote_device *device )
+{
+    return !device->open_handles && !device->connecting && device->props.connected;
+}
+
 static void bluetooth_device_connect_finished( struct winebluetooth_watcher_event_connect_finished event )
 {
     struct bluetooth_radio *radio;
+    BOOL drop = FALSE;
 
     TRACE( "device %p irp %p result %#lx\n", (void *)event.device.handle, event.irp, event.result );
 
@@ -2082,6 +2090,8 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
                 bluetooth_device_complete_gatt_irps( device, event.result );
             else if (device->props.connected && device->props.services_resolved)
                 bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
+            /* The application may have given up and closed the device while Connect was pending. */
+            drop = bluetooth_device_unowned( device );
             LeaveCriticalSection( &device->props_cs );
             goto done;
         }
@@ -2090,6 +2100,11 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
      * event.irp may also have completed on ServicesResolved already, so never complete it here. */
 done:
     LeaveCriticalSection( &device_list_cs );
+    if (drop)
+    {
+        TRACE( "No client holds %p, disconnecting\n", (void *)event.device.handle );
+        winebluetooth_device_disconnect( event.device );
+    }
     winebluetooth_device_free( event.device );
 }
 
@@ -2802,8 +2817,53 @@ static NTSTATUS WINAPI bluetooth_pnp( DEVICE_OBJECT *device, IRP *irp )
     }
 }
 
+/* The remote device a handle on this device object counts against, if any. */
+static struct bluetooth_remote_device *handle_owner( DEVICE_OBJECT *device )
+{
+    struct bluetooth_pdo_ext *ext = device->DeviceExtension;
+
+    if (device == device_auth || device == bus_fdo) return NULL;
+    if (ext->type == BLUETOOTH_PDO_EXT_REMOTE_DEVICE) return &ext->remote_device;
+    if (ext->type == BLUETOOTH_PDO_EXT_GATT_SERVICE) return ext->gatt_service.remote_device;
+    return NULL;
+}
+
 static NTSTATUS WINAPI bluetooth_create( DEVICE_OBJECT *device, IRP *irp )
 {
+    struct bluetooth_remote_device *remote = handle_owner( device );
+
+    if (remote)
+    {
+        EnterCriticalSection( &remote->props_cs );
+        remote->open_handles++;
+        LeaveCriticalSection( &remote->props_cs );
+    }
+    irp->IoStatus.Status = STATUS_SUCCESS;
+    IoCompleteRequest( irp, IO_NO_INCREMENT );
+    return STATUS_SUCCESS;
+}
+
+/* Windows drops an LE link once the last handle on the device goes away. Without this a client that
+ * abandons a device leaves it connected to nobody, and no other client can reach it. */
+static NTSTATUS WINAPI bluetooth_close( DEVICE_OBJECT *device, IRP *irp )
+{
+    struct bluetooth_remote_device *remote = handle_owner( device );
+    BOOL drop = FALSE;
+
+    if (remote)
+    {
+        EnterCriticalSection( &remote->props_cs );
+        if (remote->open_handles) remote->open_handles--;
+        drop = bluetooth_device_unowned( remote );
+        if (drop) winebluetooth_device_dup( remote->device );
+        LeaveCriticalSection( &remote->props_cs );
+        if (drop)
+        {
+            TRACE( "Last client of %p closed, disconnecting\n", (void *)remote->device.handle );
+            winebluetooth_device_disconnect( remote->device );
+            winebluetooth_device_free( remote->device );
+        }
+    }
     irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest( irp, IO_NO_INCREMENT );
     return STATUS_SUCCESS;
@@ -2846,6 +2906,7 @@ NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
     driver->DriverExtension->AddDevice = driver_add_device;
     driver->DriverUnload = driver_unload;
     driver->MajorFunction[IRP_MJ_CREATE] = bluetooth_create;
+    driver->MajorFunction[IRP_MJ_CLOSE] = bluetooth_close;
     driver->MajorFunction[IRP_MJ_PNP] = bluetooth_pnp;
     driver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = dispatch_bluetooth;
 
