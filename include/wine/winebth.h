@@ -44,6 +44,9 @@
 /* Read the associated value for a GATT characteristic */
 #define IOCTL_WINEBTH_GATT_SERVICE_READ_CHARACTERISITIC_VALUE CTL_CODE(FILE_DEVICE_BLUETOOTH, 0xd0, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/* Write a GATT characteristic value. */
+#define IOCTL_WINEBTH_GATT_SERVICE_WRITE_CHARACTERISTIC_VALUE CTL_CODE(FILE_DEVICE_BLUETOOTH, 0xd1, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 /* Get the last received LE advertisement for every remote device currently in range. */
 #define IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS CTL_CODE(FILE_DEVICE_BLUETOOTH, 0xe0, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
@@ -111,6 +114,15 @@ struct winebth_le_advertisement
     struct winebth_le_manufacturer_data manufacturer_data[WINEBTH_LE_ADV_MAX_MANUFACTURER_DATA];
     UINT16 service_data_count;
     struct winebth_le_service_data service_data[WINEBTH_LE_ADV_MAX_SERVICE_DATA];
+};
+
+struct winebth_gatt_service_write_characteristic_value_params
+{
+    BTH_LE_UUID uuid;
+    UINT16 handle;
+    unsigned int without_response : 1;
+    ULONG size;
+    BYTE buf[1];
 };
 
 struct winebth_radio_get_le_advertisements_params
