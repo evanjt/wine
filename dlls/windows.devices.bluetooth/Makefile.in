@@ -1,5 +1,5 @@
 MODULE  = windows.devices.bluetooth.dll
-IMPORTS = bluetoothapis combase setupapi
+IMPORTS = bluetoothapis combase setupapi cfgmgr32
 
 SOURCES = \
 	advertisement.c \

@@ -24,6 +24,9 @@
 #include "initguid.h"
 #include "robuffer.h"
 #include "roapi.h"
+#include "winioctl.h"
+#include "setupapi.h"
+#include "cfgmgr32.h"
 #include "wine/winebth.h"
 #include "wine/debug.h"
 
@@ -1528,15 +1531,239 @@ HRESULT stopped_args_create( BluetoothError error, IBluetoothLEAdvertisementWatc
     return S_OK;
 }
 
+/* --- BluetoothLEAdvertisementWatcher --- */
+
+typedef ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementReceivedEventArgs received_handler;
+typedef ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementWatcherStoppedEventArgs stopped_handler;
+
+struct event_handler
+{
+    IUnknown *handler;
+    INT64 token;
+};
+
+struct event_handlers
+{
+    struct event_handler *entries;
+    UINT32 count;
+    UINT32 capacity;
+};
+
 struct adv_watcher
 {
     IBluetoothLEAdvertisementWatcher IBluetoothLEAdvertisementWatcher_iface;
+    IBluetoothLEAdvertisementWatcher2 IBluetoothLEAdvertisementWatcher2_iface;
     LONG ref;
+
+    CRITICAL_SECTION cs;
+    BluetoothLEAdvertisementWatcherStatus status;
+    BluetoothLEScanningMode scanning_mode;
+    boolean allow_extended;
+    HANDLE radio;
+    HCMNOTIFICATION notification;
+    INT64 next_token;
+    struct event_handlers received;
+    struct event_handlers stopped;
 };
 
 static inline struct adv_watcher *impl_from_IBluetoothLEAdvertisementWatcher( IBluetoothLEAdvertisementWatcher *iface )
 {
     return CONTAINING_RECORD( iface, struct adv_watcher, IBluetoothLEAdvertisementWatcher_iface );
+}
+
+static HRESULT event_handlers_add( struct adv_watcher *impl, struct event_handlers *handlers, IUnknown *handler,
+                                   EventRegistrationToken *token )
+{
+    struct event_handler *entry;
+
+    if (!handler) return E_INVALIDARG;
+    EnterCriticalSection( &impl->cs );
+    if (handlers->count == handlers->capacity)
+    {
+        UINT32 capacity = max( 4, handlers->capacity * 2 );
+        if (!(entry = realloc( handlers->entries, capacity * sizeof( *entry ) )))
+        {
+            LeaveCriticalSection( &impl->cs );
+            return E_OUTOFMEMORY;
+        }
+        handlers->entries = entry;
+        handlers->capacity = capacity;
+    }
+    entry = &handlers->entries[handlers->count++];
+    entry->handler = handler;
+    IUnknown_AddRef( handler );
+    entry->token = token->value = ++impl->next_token;
+    LeaveCriticalSection( &impl->cs );
+    return S_OK;
+}
+
+static HRESULT event_handlers_remove( struct adv_watcher *impl, struct event_handlers *handlers, EventRegistrationToken token )
+{
+    IUnknown *handler = NULL;
+    UINT32 i;
+
+    EnterCriticalSection( &impl->cs );
+    for (i = 0; i < handlers->count; i++)
+    {
+        if (handlers->entries[i].token != token.value) continue;
+        handler = handlers->entries[i].handler;
+        memmove( &handlers->entries[i], &handlers->entries[i + 1], (handlers->count - i - 1) * sizeof( *handlers->entries ) );
+        handlers->count--;
+        break;
+    }
+    LeaveCriticalSection( &impl->cs );
+    if (handler) IUnknown_Release( handler );
+    return S_OK;
+}
+
+/* Take a snapshot of the handlers so that they can be invoked without holding the lock. */
+static UINT32 event_handlers_snapshot( struct adv_watcher *impl, struct event_handlers *handlers, IUnknown ***out )
+{
+    UINT32 i, count;
+
+    EnterCriticalSection( &impl->cs );
+    count = handlers->count;
+    if (!count || !(*out = malloc( count * sizeof( **out ) )))
+    {
+        LeaveCriticalSection( &impl->cs );
+        return 0;
+    }
+    for (i = 0; i < count; i++)
+    {
+        (*out)[i] = handlers->entries[i].handler;
+        IUnknown_AddRef( (*out)[i] );
+    }
+    LeaveCriticalSection( &impl->cs );
+    return count;
+}
+
+static void event_handlers_free( struct event_handlers *handlers )
+{
+    UINT32 i;
+    for (i = 0; i < handlers->count; i++) IUnknown_Release( handlers->entries[i].handler );
+    free( handlers->entries );
+}
+
+static void adv_watcher_dispatch_received( struct adv_watcher *impl, const struct winebth_le_advertisement *adv )
+{
+    IBluetoothLEAdvertisementReceivedEventArgs *args;
+    IUnknown **handlers;
+    UINT32 i, count;
+    HRESULT hr;
+
+    TRACE( "address %#I64x rssi %d name %s uuids %u manufacturer %u service data %u\n", adv->address, adv->rssi,
+           debugstr_a( adv->name ), adv->uuid_count, adv->manufacturer_data_count, adv->service_data_count );
+
+    if (!(count = event_handlers_snapshot( impl, &impl->received, &handlers ))) return;
+    if (SUCCEEDED((hr = received_args_create( adv, &args ))))
+    {
+        for (i = 0; i < count; i++)
+        {
+            hr = ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementReceivedEventArgs_Invoke(
+                (received_handler *)handlers[i], &impl->IBluetoothLEAdvertisementWatcher_iface, args );
+            if (FAILED(hr)) WARN( "Received handler %p returned %#lx\n", handlers[i], hr );
+        }
+        IBluetoothLEAdvertisementReceivedEventArgs_Release( args );
+    }
+    else
+        ERR( "Failed to create event args, hr %#lx\n", hr );
+    for (i = 0; i < count; i++) IUnknown_Release( handlers[i] );
+    free( handlers );
+}
+
+static void adv_watcher_dispatch_stopped( struct adv_watcher *impl, BluetoothError error )
+{
+    IBluetoothLEAdvertisementWatcherStoppedEventArgs *args;
+    IUnknown **handlers;
+    UINT32 i, count;
+
+    if (!(count = event_handlers_snapshot( impl, &impl->stopped, &handlers ))) return;
+    if (SUCCEEDED(stopped_args_create( error, &args )))
+    {
+        for (i = 0; i < count; i++)
+            ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementWatcherStoppedEventArgs_Invoke(
+                (stopped_handler *)handlers[i], &impl->IBluetoothLEAdvertisementWatcher_iface, args );
+        IBluetoothLEAdvertisementWatcherStoppedEventArgs_Release( args );
+    }
+    for (i = 0; i < count; i++) IUnknown_Release( handlers[i] );
+    free( handlers );
+}
+
+static DWORD CALLBACK adv_watcher_notify_callback( HCMNOTIFICATION notify, void *ctx, CM_NOTIFY_ACTION action,
+                                                   CM_NOTIFY_EVENT_DATA *event_data, DWORD size )
+{
+    struct adv_watcher *impl = ctx;
+    const struct winebth_le_advertisement *adv;
+
+    TRACE( "(%p, %p, %d, %p, %lu)\n", notify, ctx, action, event_data, size );
+
+    if (action != CM_NOTIFY_ACTION_DEVICECUSTOMEVENT) return ERROR_SUCCESS;
+    if (!IsEqualGUID( &event_data->u.DeviceHandle.EventGuid, &GUID_WINEBTH_LE_ADVERTISEMENT )) return ERROR_SUCCESS;
+    if (event_data->u.DeviceHandle.DataSize < sizeof( *adv ))
+    {
+        WARN( "Unexpected event data size %lu\n", event_data->u.DeviceHandle.DataSize );
+        return ERROR_SUCCESS;
+    }
+    adv = (const struct winebth_le_advertisement *)event_data->u.DeviceHandle.Data;
+
+    EnterCriticalSection( &impl->cs );
+    if (impl->status != BluetoothLEAdvertisementWatcherStatus_Started)
+    {
+        LeaveCriticalSection( &impl->cs );
+        return ERROR_SUCCESS;
+    }
+    LeaveCriticalSection( &impl->cs );
+    adv_watcher_dispatch_received( impl, adv );
+    return ERROR_SUCCESS;
+}
+
+/* Replay the advertisements the driver already knows about so that devices show up immediately. */
+static void CALLBACK adv_watcher_replay( TP_CALLBACK_INSTANCE *instance, void *ctx )
+{
+    struct adv_watcher *impl = ctx;
+    struct winebth_radio_get_le_advertisements_params *params;
+    DWORD size = offsetof( struct winebth_radio_get_le_advertisements_params, advertisements[32] ), bytes, i;
+    HANDLE radio;
+
+    EnterCriticalSection( &impl->cs );
+    radio = impl->status == BluetoothLEAdvertisementWatcherStatus_Started ? impl->radio : NULL;
+    LeaveCriticalSection( &impl->cs );
+
+    if (radio && (params = malloc( size )))
+    {
+        if (DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS, NULL, 0, params, size, &bytes, NULL ))
+        {
+            for (i = 0; i < min( params->count, 32 ); i++)
+                adv_watcher_dispatch_received( impl, &params->advertisements[i] );
+        }
+        else
+            WARN( "IOCTL_WINEBTH_RADIO_GET_LE_ADVERTISEMENTS failed: %lu\n", GetLastError() );
+        free( params );
+    }
+    IBluetoothLEAdvertisementWatcher_Release( &impl->IBluetoothLEAdvertisementWatcher_iface );
+}
+
+static HANDLE open_default_radio( void )
+{
+    char buffer[sizeof( SP_DEVICE_INTERFACE_DETAIL_DATA_W ) + MAX_PATH * sizeof( WCHAR )];
+    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
+    SP_DEVICE_INTERFACE_DATA iface_data = { .cbSize = sizeof( iface_data ) };
+    HANDLE radio = INVALID_HANDLE_VALUE;
+    HDEVINFO devinfo;
+
+    devinfo = SetupDiGetClassDevsW( &GUID_BLUETOOTH_RADIO_INTERFACE, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE );
+    if (devinfo == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
+
+    detail->cbSize = sizeof( *detail );
+    if (SetupDiEnumDeviceInterfaces( devinfo, NULL, &GUID_BLUETOOTH_RADIO_INTERFACE, 0, &iface_data ) &&
+        SetupDiGetDeviceInterfaceDetailW( devinfo, &iface_data, detail, sizeof( buffer ), NULL, NULL ))
+    {
+        radio = CreateFileW( detail->DevicePath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                             OPEN_EXISTING, 0, NULL );
+        if (radio == INVALID_HANDLE_VALUE) WARN( "Failed to open %s: %lu\n", debugstr_w( detail->DevicePath ), GetLastError() );
+    }
+    SetupDiDestroyDeviceInfoList( devinfo );
+    return radio;
 }
 
 static HRESULT WINAPI adv_watcher_QueryInterface( IBluetoothLEAdvertisementWatcher *iface, REFIID iid, void **out )
@@ -1551,6 +1778,12 @@ static HRESULT WINAPI adv_watcher_QueryInterface( IBluetoothLEAdvertisementWatch
         IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementWatcher ))
     {
         IBluetoothLEAdvertisementWatcher_AddRef(( *out = &impl->IBluetoothLEAdvertisementWatcher_iface ));
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementWatcher2 ))
+    {
+        IBluetoothLEAdvertisementWatcher_AddRef( iface );
+        *out = &impl->IBluetoothLEAdvertisementWatcher2_iface;
         return S_OK;
     }
 
@@ -1570,7 +1803,23 @@ static ULONG WINAPI adv_watcher_Release( IBluetoothLEAdvertisementWatcher *iface
 {
     struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
     ULONG ref = InterlockedDecrement( &impl->ref );
+
     TRACE( "(%p)\n", iface );
+
+    if (!ref)
+    {
+        if (impl->notification) CM_Unregister_Notification( impl->notification );
+        if (impl->radio != INVALID_HANDLE_VALUE)
+        {
+            DeviceIoControl( impl->radio, IOCTL_WINEBTH_RADIO_STOP_DISCOVERY, NULL, 0, NULL, 0, NULL, NULL );
+            CloseHandle( impl->radio );
+        }
+        event_handlers_free( &impl->received );
+        event_handlers_free( &impl->stopped );
+        impl->cs.DebugInfo->Spare[0] = 0;
+        DeleteCriticalSection( &impl->cs );
+        free( impl );
+    }
     return ref;
 }
 
@@ -1582,14 +1831,13 @@ static HRESULT WINAPI adv_watcher_GetIids( IBluetoothLEAdvertisementWatcher *ifa
 
 static HRESULT WINAPI adv_watcher_GetRuntimeClassName( IBluetoothLEAdvertisementWatcher *iface, HSTRING *class_name )
 {
-    FIXME( "(%p, %p): stub!\n", iface, class_name );
-    return E_NOTIMPL;
+    return class_name_string( L"Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher", class_name );
 }
 
 static HRESULT WINAPI adv_watcher_GetTrustLevel( IBluetoothLEAdvertisementWatcher *iface, TrustLevel *level )
 {
-    FIXME( "(%p, %p): stub!\n", iface, level );
-    return E_NOTIMPL;
+    *level = BaseTrust;
+    return S_OK;
 }
 
 static HRESULT WINAPI adv_watcher_get_MinSamplingInternal( IBluetoothLEAdvertisementWatcher *iface, TimeSpan *value )
@@ -1622,20 +1870,30 @@ static HRESULT WINAPI adv_watcher_get_MaxOutOfRangeTimeout( IBluetoothLEAdvertis
 
 static HRESULT WINAPI adv_watcher_get_Status( IBluetoothLEAdvertisementWatcher *iface, BluetoothLEAdvertisementWatcherStatus *status )
 {
-    FIXME( "(%p, %p): stub!\n", iface, status );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+
+    TRACE( "(%p, %p)\n", iface, status );
+
+    EnterCriticalSection( &impl->cs );
+    *status = impl->status;
+    LeaveCriticalSection( &impl->cs );
+    return S_OK;
 }
 
 static HRESULT WINAPI adv_watcher_get_ScanningMode( IBluetoothLEAdvertisementWatcher *iface, BluetoothLEScanningMode *value )
 {
-    FIXME( "(%p, %p): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->scanning_mode;
+    return S_OK;
 }
 
 static HRESULT WINAPI adv_watcher_put_ScanningMode( IBluetoothLEAdvertisementWatcher *iface, BluetoothLEScanningMode value )
 {
-    FIXME( "(%p, %d): stub!\n", iface, value );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %d)\n", iface, value );
+    impl->scanning_mode = value;
+    return S_OK;
 }
 
 static HRESULT WINAPI adv_watcher_get_SignalStrengthFilter( IBluetoothLEAdvertisementWatcher *iface, IBluetoothSignalStrengthFilter **filter )
@@ -1664,43 +1922,141 @@ static HRESULT WINAPI adv_watcher_put_AdvertisementFilter( IBluetoothLEAdvertise
 
 static HRESULT WINAPI adv_watcher_Start( IBluetoothLEAdvertisementWatcher *iface )
 {
-    FIXME( "(%p): stub!\n", iface );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    struct winebth_radio_start_discovery_params params = { .le = 1 };
+    CM_NOTIFY_FILTER filter = { .cbSize = sizeof( filter ), .FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE };
+    HCMNOTIFICATION notification;
+    CONFIGRET ret;
+    HANDLE radio;
+    DWORD bytes;
+
+    TRACE( "(%p)\n", iface );
+
+    EnterCriticalSection( &impl->cs );
+    if (impl->status == BluetoothLEAdvertisementWatcherStatus_Started)
+    {
+        LeaveCriticalSection( &impl->cs );
+        return S_OK;
+    }
+    if (impl->status == BluetoothLEAdvertisementWatcherStatus_Stopping)
+    {
+        LeaveCriticalSection( &impl->cs );
+        return E_ILLEGAL_METHOD_CALL;
+    }
+
+    if ((radio = open_default_radio()) == INVALID_HANDLE_VALUE)
+    {
+        impl->status = BluetoothLEAdvertisementWatcherStatus_Aborted;
+        LeaveCriticalSection( &impl->cs );
+        return HRESULT_FROM_WIN32( ERROR_DEVICE_NOT_AVAILABLE );
+    }
+    filter.u.DeviceHandle.hTarget = radio;
+    if ((ret = CM_Register_Notification( &filter, impl, adv_watcher_notify_callback, &notification )))
+    {
+        ERR( "CM_Register_Notification failed: %#lx\n", ret );
+        CloseHandle( radio );
+        impl->status = BluetoothLEAdvertisementWatcherStatus_Aborted;
+        LeaveCriticalSection( &impl->cs );
+        return E_FAIL;
+    }
+    if (!DeviceIoControl( radio, IOCTL_WINEBTH_RADIO_START_DISCOVERY, &params, sizeof( params ), NULL, 0, &bytes, NULL ))
+        WARN( "IOCTL_WINEBTH_RADIO_START_DISCOVERY failed: %lu\n", GetLastError() );
+
+    impl->radio = radio;
+    impl->notification = notification;
+    impl->status = BluetoothLEAdvertisementWatcherStatus_Started;
+    LeaveCriticalSection( &impl->cs );
+
+    IBluetoothLEAdvertisementWatcher_AddRef( iface );
+    if (!TrySubmitThreadpoolCallback( adv_watcher_replay, impl, NULL ))
+        IBluetoothLEAdvertisementWatcher_Release( iface );
+    return S_OK;
+}
+
+struct stop_context
+{
+    struct adv_watcher *impl;
+    HCMNOTIFICATION notification;
+    HANDLE radio;
+};
+
+/* Unregistering waits for in-flight callbacks, so it cannot run on a thread that may be inside one. */
+static void CALLBACK adv_watcher_finish_stop( TP_CALLBACK_INSTANCE *instance, void *ctx )
+{
+    struct stop_context *stop = ctx;
+    struct adv_watcher *impl = stop->impl;
+
+    CM_Unregister_Notification( stop->notification );
+    DeviceIoControl( stop->radio, IOCTL_WINEBTH_RADIO_STOP_DISCOVERY, NULL, 0, NULL, 0, NULL, NULL );
+    CloseHandle( stop->radio );
+
+    EnterCriticalSection( &impl->cs );
+    impl->status = BluetoothLEAdvertisementWatcherStatus_Stopped;
+    LeaveCriticalSection( &impl->cs );
+
+    adv_watcher_dispatch_stopped( impl, BluetoothError_Success );
+    IBluetoothLEAdvertisementWatcher_Release( &impl->IBluetoothLEAdvertisementWatcher_iface );
+    free( stop );
 }
 
 static HRESULT WINAPI adv_watcher_Stop( IBluetoothLEAdvertisementWatcher *iface )
 {
-    FIXME( "(%p): stub!\n", iface );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    struct stop_context *stop;
+
+    TRACE( "(%p)\n", iface );
+
+    if (!(stop = malloc( sizeof( *stop ) ))) return E_OUTOFMEMORY;
+
+    EnterCriticalSection( &impl->cs );
+    if (impl->status != BluetoothLEAdvertisementWatcherStatus_Started)
+    {
+        LeaveCriticalSection( &impl->cs );
+        free( stop );
+        return S_OK;
+    }
+    impl->status = BluetoothLEAdvertisementWatcherStatus_Stopping;
+    stop->impl = impl;
+    stop->notification = impl->notification;
+    stop->radio = impl->radio;
+    impl->notification = NULL;
+    impl->radio = INVALID_HANDLE_VALUE;
+    LeaveCriticalSection( &impl->cs );
+
+    IBluetoothLEAdvertisementWatcher_AddRef( iface );
+    if (!TrySubmitThreadpoolCallback( adv_watcher_finish_stop, stop, NULL ))
+        adv_watcher_finish_stop( NULL, stop );
+    return S_OK;
 }
 
-static HRESULT WINAPI adv_watcher_add_Received( IBluetoothLEAdvertisementWatcher *iface,
-                                                ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementReceivedEventArgs *handler,
+static HRESULT WINAPI adv_watcher_add_Received( IBluetoothLEAdvertisementWatcher *iface, received_handler *handler,
                                                 EventRegistrationToken *token )
 {
-    FIXME( "(%p, %p, %p): stub!\n", iface, handler, token );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %p, %p)\n", iface, handler, token );
+    return event_handlers_add( impl, &impl->received, (IUnknown *)handler, token );
 }
 
 static HRESULT WINAPI adv_watcher_remove_Received( IBluetoothLEAdvertisementWatcher *iface, EventRegistrationToken token )
 {
-    FIXME( "(%p, %I64x): stub!\n", iface, token.value );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %I64x)\n", iface, token.value );
+    return event_handlers_remove( impl, &impl->received, token );
 }
 
-static HRESULT WINAPI adv_watcher_add_Stopped( IBluetoothLEAdvertisementWatcher *iface,
-                                               ITypedEventHandler_BluetoothLEAdvertisementWatcher_BluetoothLEAdvertisementWatcherStoppedEventArgs *handler,
+static HRESULT WINAPI adv_watcher_add_Stopped( IBluetoothLEAdvertisementWatcher *iface, stopped_handler *handler,
                                                EventRegistrationToken *token )
 {
-    FIXME( "(%p, %p, %p): stub!\n", iface, handler, token );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %p, %p)\n", iface, handler, token );
+    return event_handlers_add( impl, &impl->stopped, (IUnknown *)handler, token );
 }
-
 
 static HRESULT WINAPI adv_watcher_remove_Stopped( IBluetoothLEAdvertisementWatcher *iface, EventRegistrationToken token )
 {
-    FIXME( "(%p, %I64x): stub!\n", iface, token.value );
-    return E_NOTIMPL;
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher( iface );
+    TRACE( "(%p, %I64x)\n", iface, token.value );
+    return event_handlers_remove( impl, &impl->stopped, token );
 }
 
 static const IBluetoothLEAdvertisementWatcherVtbl adv_watcher_vtbl =
@@ -1730,7 +2086,37 @@ static const IBluetoothLEAdvertisementWatcherVtbl adv_watcher_vtbl =
     adv_watcher_add_Received,
     adv_watcher_remove_Received,
     adv_watcher_add_Stopped,
-    adv_watcher_remove_Stopped
+    adv_watcher_remove_Stopped,
+};
+
+DEFINE_IINSPECTABLE( adv_watcher2, IBluetoothLEAdvertisementWatcher2, struct adv_watcher, IBluetoothLEAdvertisementWatcher_iface )
+
+static HRESULT WINAPI adv_watcher2_get_AllowExtendedAdvertisements( IBluetoothLEAdvertisementWatcher2 *iface, boolean *value )
+{
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher2( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->allow_extended;
+    return S_OK;
+}
+
+static HRESULT WINAPI adv_watcher2_put_AllowExtendedAdvertisements( IBluetoothLEAdvertisementWatcher2 *iface, boolean value )
+{
+    struct adv_watcher *impl = impl_from_IBluetoothLEAdvertisementWatcher2( iface );
+    TRACE( "(%p, %d)\n", iface, value );
+    impl->allow_extended = value;
+    return S_OK;
+}
+
+static const IBluetoothLEAdvertisementWatcher2Vtbl adv_watcher2_vtbl =
+{
+    adv_watcher2_QueryInterface,
+    adv_watcher2_AddRef,
+    adv_watcher2_Release,
+    adv_watcher2_GetIids,
+    adv_watcher2_GetRuntimeClassName,
+    adv_watcher2_GetTrustLevel,
+    adv_watcher2_get_AllowExtendedAdvertisements,
+    adv_watcher2_put_AllowExtendedAdvertisements,
 };
 
 static HRESULT adv_watcher_create( IBluetoothLEAdvertisementWatcher **watcher )
@@ -1739,7 +2125,14 @@ static HRESULT adv_watcher_create( IBluetoothLEAdvertisementWatcher **watcher )
 
     if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
     impl->IBluetoothLEAdvertisementWatcher_iface.lpVtbl = &adv_watcher_vtbl;
+    impl->IBluetoothLEAdvertisementWatcher2_iface.lpVtbl = &adv_watcher2_vtbl;
     impl->ref = 1;
+    impl->status = BluetoothLEAdvertisementWatcherStatus_Created;
+    impl->scanning_mode = BluetoothLEScanningMode_Passive;
+    impl->radio = INVALID_HANDLE_VALUE;
+    InitializeCriticalSectionEx( &impl->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
+    impl->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": adv_watcher.cs");
+
     *watcher = &impl->IBluetoothLEAdvertisementWatcher_iface;
     return S_OK;
 }
@@ -1824,7 +2217,7 @@ static const struct IActivationFactoryVtbl adv_watcher_factory_vtbl =
     adv_watcher_factory_GetRuntimeClassName,
     adv_watcher_factory_GetTrustLevel,
     /* IActivationFactory */
-    adv_watcher_factory_ActivateInstance
+    adv_watcher_factory_ActivateInstance,
 };
 
 static struct adv_watcher_factory adv_watcher_factory =
