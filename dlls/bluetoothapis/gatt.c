@@ -191,15 +191,16 @@ HRESULT WINAPI BluetoothGATTGetCharacteristicValue( HANDLE device, BTH_LE_GATT_C
     }
     CloseHandle( ovl.hEvent );
 
-    if (err)
+    /* The driver reports the required size alongside ERROR_MORE_DATA. */
+    if (err && err != ERROR_MORE_DATA)
     {
         free( params );
         return HRESULT_FROM_WIN32( err == ERROR_PRIVILEGE_NOT_HELD ? ERROR_INVALID_ACCESS : err );
     }
 
-    ret = S_OK;
+    ret = err ? HRESULT_FROM_WIN32( ERROR_MORE_DATA ) : S_OK;
     *actual = max( offsetof( BTH_LE_GATT_CHARACTERISTIC_VALUE, Data[params->size] ), sizeof( *val ) );
-    if (val)
+    if (val && !err)
     {
         if (size >= params->size)
         {
