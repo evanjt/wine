@@ -1456,7 +1456,7 @@ NTSTATUS bluez_gatt_characteristic_write( void *connection, void *watcher_ctx, s
     const char *type = without_response ? "command" : "request";
     DBusMessage *request;
 
-    TRACE( "(%s, %p, %lu, %d)\n", debugstr_a( chrc->str ), irp, size, without_response );
+    TRACE( "(%s, %p, %u, %d)\n", debugstr_a( chrc->str ), irp, size, without_response );
 
     request = p_dbus_message_new_method_call( BLUEZ_DEST, chrc->str, BLUEZ_INTERFACE_GATT_CHARACTERISTICS, "WriteValue" );
     if (!request)
