@@ -106,6 +106,7 @@ struct bluetooth_remote_device
     UNICODE_STRING bthle_symlink_name; /* Guarded by props_cs */
     struct list gatt_services; /* Guarded by props_cs */
     LIST_ENTRY gatt_irp_list; /* GATT service requests waiting for a connection. Guarded by props_cs */
+    BOOL connecting; /* A BlueZ Connect call is in flight. Guarded by props_cs */
 };
 
 struct bluetooth_gatt_service
@@ -487,10 +488,11 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
             /* Windows connects on demand when services are requested. Keep the request pending until BlueZ
              * has resolved the device's services. */
             status = STATUS_PENDING;
-            if (!ext->props.connected)
+            if (!ext->props.connected && !ext->connecting)
             {
                 winebluetooth_device_dup( ext->device );
                 status = winebluetooth_device_connect( ext->device, irp );
+                ext->connecting = status == STATUS_PENDING;
             }
             if (status == STATUS_PENDING)
             {
@@ -1970,6 +1972,7 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
         {
             if (!winebluetooth_device_equal( event.device, device->device )) continue;
             EnterCriticalSection( &device->props_cs );
+            device->connecting = FALSE;
             if (event.result)
                 bluetooth_device_complete_gatt_irps( device, event.result );
             else if (device->props.connected && device->props.services_resolved)
