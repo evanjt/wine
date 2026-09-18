@@ -1652,8 +1652,11 @@ static void bluez_auth_agent_ctx_decref( struct bluez_auth_agent_ctx *ctx )
         unix_name_free( ctx->device );
         if (ctx->status != BLUEZ_PAIRING_SESSION_CANCELLED)
         {
-            p_dbus_connection_free_preallocated_send( ctx->connection, ctx->preallocate_send );
-            p_dbus_message_unref( ctx->auth_request );
+            if (ctx->auth_request)
+            {
+                p_dbus_connection_free_preallocated_send( ctx->connection, ctx->preallocate_send );
+                p_dbus_message_unref( ctx->auth_request );
+            }
             p_dbus_connection_unref( ctx->connection );
         }
     }
@@ -1675,16 +1678,37 @@ static DBusHandlerResult bluez_auth_agent_vtable_message_handler( DBusConnection
     if (!prealloc_send)
         return DBUS_HANDLER_RESULT_NEED_MEMORY;
 
-    if (p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "RequestConfirmation" ))
+    if (p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "RequestConfirmation" ) ||
+        p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "RequestPasskey" ) ||
+        p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "DisplayPasskey" ))
     {
+        BLUETOOTH_AUTHENTICATION_METHOD method;
+        dbus_uint32_t passkey = 0;
+        dbus_uint16_t entered = 0;
         struct unix_name *device;
         const char *device_path;
-        dbus_uint32_t passkey;
         DBusError error;
+        dbus_bool_t ok;
 
         p_dbus_error_init( &error );
-        if (!p_dbus_message_get_args( message, &error, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
-                                      DBUS_TYPE_INVALID ))
+        if (p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "RequestConfirmation" ))
+        {
+            method = BLUETOOTH_AUTHENTICATION_METHOD_NUMERIC_COMPARISON;
+            ok = p_dbus_message_get_args( message, &error, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
+                                          DBUS_TYPE_INVALID );
+        }
+        else if (p_dbus_message_is_method_call( message, BLUEZ_INTERFACE_AGENT, "RequestPasskey" ))
+        {
+            method = BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY;
+            ok = p_dbus_message_get_args( message, &error, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID );
+        }
+        else
+        {
+            method = BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY_NOTIFICATION;
+            ok = p_dbus_message_get_args( message, &error, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
+                                          DBUS_TYPE_UINT16, &entered, DBUS_TYPE_INVALID );
+        }
+        if (!ok)
         {
             ERR( "Failed to get message args: %s\n", dbgstr_dbus_error( &error ) );
             p_dbus_error_free( &error );
@@ -1692,21 +1716,44 @@ static DBusHandlerResult bluez_auth_agent_vtable_message_handler( DBusConnection
             return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
         p_dbus_error_free( &error );
+
+        /* BlueZ repeats DisplayPasskey as digits are typed on the remote, and wants each answered at once. */
+        if (method == BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY_NOTIFICATION)
+        {
+            reply = p_dbus_message_new_method_return( message );
+            if (!reply)
+            {
+                p_dbus_connection_free_preallocated_send( connection, prealloc_send );
+                return DBUS_HANDLER_RESULT_NEED_MEMORY;
+            }
+            p_dbus_connection_send_preallocated( connection, prealloc_send, reply, NULL );
+            p_dbus_message_unref( reply );
+            pthread_mutex_lock( &ctx->lock );
+            if (entered || ctx->status != BLUEZ_PAIRING_SESSION_NONE)
+            {
+                pthread_mutex_unlock( &ctx->lock );
+                return DBUS_HANDLER_RESULT_HANDLED;
+            }
+            pthread_mutex_unlock( &ctx->lock );
+            prealloc_send = NULL;
+        }
+
         device = unix_name_get_or_create( device_path );
         if (!device)
         {
             ERR( "Failed to allocate memory for device path %s\n", device_path );
-            p_dbus_connection_free_preallocated_send( connection, prealloc_send );
+            if (prealloc_send) p_dbus_connection_free_preallocated_send( connection, prealloc_send );
             return DBUS_HANDLER_RESULT_NEED_MEMORY;
         }
 
-        TRACE( "Received a numeric confirmation request for device %s\n", debugstr_a( device_path ) );
+        TRACE( "Received authentication request %d for device %s\n", method, debugstr_a( device_path ) );
         pthread_mutex_lock( &ctx->lock );
         ctx->status = BLUEZ_PAIRING_SESSION_INCOMING;
         ctx->device = device;
-        ctx->method = BLUETOOTH_AUTHENTICATION_METHOD_NUMERIC_COMPARISON;
+        ctx->method = method;
         ctx->passkey = passkey;
-        ctx->auth_request = p_dbus_message_ref( message );
+        /* A passkey display needs no reply, so the session holds no message to answer. */
+        ctx->auth_request = prealloc_send ? p_dbus_message_ref( message ) : NULL;
         ctx->preallocate_send = prealloc_send;
         ctx->connection = p_dbus_connection_ref( connection );
         pthread_mutex_unlock( &ctx->lock );
@@ -1725,8 +1772,11 @@ static DBusHandlerResult bluez_auth_agent_vtable_message_handler( DBusConnection
             TRACE( "Cancelling authentication request from device %s\n", debugstr_a( ctx->device->str ) );
             ctx->status = BLUEZ_PAIRING_SESSION_CANCELLED;
             unix_name_free( ctx->device );
-            p_dbus_message_unref( ctx->auth_request );
-            p_dbus_connection_free_preallocated_send( ctx->connection, ctx->preallocate_send );
+            if (ctx->auth_request)
+            {
+                p_dbus_message_unref( ctx->auth_request );
+                p_dbus_connection_free_preallocated_send( ctx->connection, ctx->preallocate_send );
+            }
             p_dbus_connection_unref( ctx->connection );
         }
         pthread_mutex_unlock( &ctx->lock );
@@ -1882,20 +1932,34 @@ NTSTATUS bluez_auth_agent_send_response( void *auth_agent, struct unix_name *dev
             ret = STATUS_DEVICE_NOT_CONNECTED;
             goto done;
         }
-        if (numeric_or_passkey != ctx->passkey || method != ctx->method)
+        if (method != ctx->method || (method == BLUETOOTH_AUTHENTICATION_METHOD_NUMERIC_COMPARISON &&
+                                      numeric_or_passkey != ctx->passkey))
             negative = TRUE;
 
-        reply = negative ? p_dbus_message_new_error( ctx->auth_request, "org.bluez.Rejected", "" )
-                         : p_dbus_message_new_method_return( ctx->auth_request );
-        if (!reply)
+        /* A passkey display was answered when it arrived, the response only closes the session. */
+        if (ctx->auth_request)
         {
-            ret = STATUS_NO_MEMORY;
-            goto done;
+            reply = negative ? p_dbus_message_new_error( ctx->auth_request, "org.bluez.Error.Rejected", "" )
+                             : p_dbus_message_new_method_return( ctx->auth_request );
+            if (reply && !negative && method == BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY)
+            {
+                dbus_uint32_t passkey = numeric_or_passkey;
+                if (!p_dbus_message_append_args( reply, DBUS_TYPE_UINT32, &passkey, DBUS_TYPE_INVALID ))
+                {
+                    p_dbus_message_unref( reply );
+                    reply = NULL;
+                }
+            }
+            if (!reply)
+            {
+                ret = STATUS_NO_MEMORY;
+                goto done;
+            }
+            p_dbus_connection_send_preallocated( ctx->connection, ctx->preallocate_send, reply, NULL );
+            p_dbus_message_unref( ctx->auth_request );
         }
-        p_dbus_connection_send_preallocated( ctx->connection, ctx->preallocate_send, reply, NULL );
 
         unix_name_free( ctx->device );
-        p_dbus_message_unref( ctx->auth_request );
         p_dbus_connection_unref( ctx->connection );
         ctx->status = BLUEZ_PAIRING_SESSION_NONE;
         *authenticated = !negative;
