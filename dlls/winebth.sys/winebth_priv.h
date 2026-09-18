@@ -292,6 +292,8 @@ void winebluetooth_gatt_characteristic_value_free( struct winebluetooth_gatt_cha
 NTSTATUS winebluetooth_gatt_characteristic_read_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp );
 NTSTATUS winebluetooth_gatt_characteristic_write_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp,
                                                         const BYTE *data, ULONG size, BOOL without_response );
+NTSTATUS winebluetooth_gatt_characteristic_set_notify_async( winebluetooth_gatt_characteristic_t chrc, IRP *irp,
+                                                             BOOL enable );
 
 enum winebluetooth_watcher_event_type
 {

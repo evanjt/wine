@@ -1438,6 +1438,20 @@ NTSTATUS bluez_gatt_characteristic_write( void *connection, void *watcher_ctx, s
     return bluez_gatt_send_async( connection, watcher_ctx, request, irp );
 }
 
+NTSTATUS bluez_gatt_characteristic_set_notify( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                               BOOL enable )
+{
+    DBusMessage *request;
+
+    TRACE( "(%s, %p, %d)\n", debugstr_a( chrc->str ), irp, enable );
+
+    request = p_dbus_message_new_method_call( BLUEZ_DEST, chrc->str, BLUEZ_INTERFACE_GATT_CHARACTERISTICS,
+                                              enable ? "StartNotify" : "StopNotify" );
+    if (!request)
+        return STATUS_NO_MEMORY;
+    return bluez_gatt_send_async( connection, watcher_ctx, request, irp );
+}
+
 /* The status of a pairing session initiated by BlueZ. */
 enum bluez_pairing_session_status
 {
@@ -3073,6 +3087,11 @@ NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_
 }
 NTSTATUS bluez_gatt_characteristic_write( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
                                           const BYTE *data, ULONG size, BOOL without_response )
+{
+    return STATUS_NOT_SUPPORTED;
+}
+NTSTATUS bluez_gatt_characteristic_set_notify( void *connection, void *watcher_ctx, struct unix_name *chrc, IRP *irp,
+                                               BOOL enable )
 {
     return STATUS_NOT_SUPPORTED;
 }
