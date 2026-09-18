@@ -18,12 +18,55 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#define WIDL_using_Windows_Storage_Streams
 #include "private.h"
+#include "windows.storage.streams.h"
+#include "initguid.h"
+#include "robuffer.h"
+#include "roapi.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL( bluetooth );
 
 /* --- Helpers --- */
+
+static HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out )
+{
+    static const WCHAR class_name[] = L"Windows.Storage.Streams.Buffer";
+    IBufferByteAccess *access;
+    IBufferFactory *factory;
+    HSTRING_HEADER hdr;
+    HSTRING str;
+    HRESULT hr;
+    BYTE *bytes;
+
+    *out = NULL;
+    if (FAILED((hr = WindowsCreateStringReference( class_name, ARRAY_SIZE( class_name ) - 1, &hdr, &str )))) return hr;
+    if (FAILED((hr = RoGetActivationFactory( str, &IID_IBufferFactory, (void **)&factory )))) return hr;
+    hr = IBufferFactory_Create( factory, size, out );
+    IBufferFactory_Release( factory );
+    if (FAILED(hr)) return hr;
+
+    if (FAILED((hr = IBuffer_QueryInterface( *out, &IID_IBufferByteAccess, (void **)&access ))))
+    {
+        IBuffer_Release( *out );
+        *out = NULL;
+        return hr;
+    }
+    hr = IBufferByteAccess_Buffer( access, &bytes );
+    IBufferByteAccess_Release( access );
+    if (SUCCEEDED(hr))
+    {
+        memcpy( bytes, data, size );
+        hr = IBuffer_put_Length( *out, size );
+    }
+    if (FAILED(hr))
+    {
+        IBuffer_Release( *out );
+        *out = NULL;
+    }
+    return hr;
+}
 
 static HRESULT class_name_string( const WCHAR *name, HSTRING *out )
 {
@@ -472,6 +515,277 @@ HRESULT guid_vector_create( const GUID *items, UINT32 count, BOOL view, struct g
         impl->count = impl->capacity = count;
     }
     *out = impl;
+    return S_OK;
+}
+
+/* --- BluetoothLEManufacturerData --- */
+
+struct manufacturer_data
+{
+    IBluetoothLEManufacturerData IBluetoothLEManufacturerData_iface;
+    LONG ref;
+    UINT16 company_id;
+    IBuffer *data;
+};
+
+static inline struct manufacturer_data *impl_from_IBluetoothLEManufacturerData( IBluetoothLEManufacturerData *iface )
+{
+    return CONTAINING_RECORD( iface, struct manufacturer_data, IBluetoothLEManufacturerData_iface );
+}
+
+static HRESULT WINAPI manufacturer_data_QueryInterface( IBluetoothLEManufacturerData *iface, REFIID iid, void **out )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) ||
+        IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) ||
+        IsEqualGUID( iid, &IID_IBluetoothLEManufacturerData ))
+    {
+        IBluetoothLEManufacturerData_AddRef(( *out = &impl->IBluetoothLEManufacturerData_iface ));
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI manufacturer_data_AddRef( IBluetoothLEManufacturerData *iface )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI manufacturer_data_Release( IBluetoothLEManufacturerData *iface )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+    if (!ref)
+    {
+        if (impl->data) IBuffer_Release( impl->data );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT WINAPI manufacturer_data_GetIids( IBluetoothLEManufacturerData *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI manufacturer_data_GetRuntimeClassName( IBluetoothLEManufacturerData *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData", class_name );
+}
+
+static HRESULT WINAPI manufacturer_data_GetTrustLevel( IBluetoothLEManufacturerData *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI manufacturer_data_get_CompanyId( IBluetoothLEManufacturerData *iface, UINT16 *value )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->company_id;
+    return S_OK;
+}
+
+static HRESULT WINAPI manufacturer_data_put_CompanyId( IBluetoothLEManufacturerData *iface, UINT16 value )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    TRACE( "(%p, %u)\n", iface, value );
+    impl->company_id = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI manufacturer_data_get_Data( IBluetoothLEManufacturerData *iface, IBuffer **value )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    if ((*value = impl->data)) IBuffer_AddRef( *value );
+    return S_OK;
+}
+
+static HRESULT WINAPI manufacturer_data_put_Data( IBluetoothLEManufacturerData *iface, IBuffer *value )
+{
+    struct manufacturer_data *impl = impl_from_IBluetoothLEManufacturerData( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    if (value) IBuffer_AddRef( value );
+    if (impl->data) IBuffer_Release( impl->data );
+    impl->data = value;
+    return S_OK;
+}
+
+static const IBluetoothLEManufacturerDataVtbl manufacturer_data_vtbl =
+{
+    manufacturer_data_QueryInterface,
+    manufacturer_data_AddRef,
+    manufacturer_data_Release,
+    manufacturer_data_GetIids,
+    manufacturer_data_GetRuntimeClassName,
+    manufacturer_data_GetTrustLevel,
+    manufacturer_data_get_CompanyId,
+    manufacturer_data_put_CompanyId,
+    manufacturer_data_get_Data,
+    manufacturer_data_put_Data,
+};
+
+HRESULT manufacturer_data_create( UINT16 company_id, const BYTE *data, UINT32 size,
+                                  IBluetoothLEManufacturerData **out )
+{
+    struct manufacturer_data *impl;
+    HRESULT hr;
+
+    if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
+    impl->IBluetoothLEManufacturerData_iface.lpVtbl = &manufacturer_data_vtbl;
+    impl->ref = 1;
+    impl->company_id = company_id;
+    if (FAILED((hr = buffer_create( data, size, &impl->data ))))
+    {
+        free( impl );
+        return hr;
+    }
+    *out = &impl->IBluetoothLEManufacturerData_iface;
+    return S_OK;
+}
+
+/* --- BluetoothLEAdvertisementDataSection --- */
+
+struct data_section
+{
+    IBluetoothLEAdvertisementDataSection IBluetoothLEAdvertisementDataSection_iface;
+    LONG ref;
+    BYTE type;
+    IBuffer *data;
+};
+
+static inline struct data_section *impl_from_IBluetoothLEAdvertisementDataSection( IBluetoothLEAdvertisementDataSection *iface )
+{
+    return CONTAINING_RECORD( iface, struct data_section, IBluetoothLEAdvertisementDataSection_iface );
+}
+
+static HRESULT WINAPI data_section_QueryInterface( IBluetoothLEAdvertisementDataSection *iface, REFIID iid, void **out )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) ||
+        IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) ||
+        IsEqualGUID( iid, &IID_IBluetoothLEAdvertisementDataSection ))
+    {
+        IBluetoothLEAdvertisementDataSection_AddRef(( *out = &impl->IBluetoothLEAdvertisementDataSection_iface ));
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI data_section_AddRef( IBluetoothLEAdvertisementDataSection *iface )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI data_section_Release( IBluetoothLEAdvertisementDataSection *iface )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+    if (!ref)
+    {
+        if (impl->data) IBuffer_Release( impl->data );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT WINAPI data_section_GetIids( IBluetoothLEAdvertisementDataSection *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI data_section_GetRuntimeClassName( IBluetoothLEAdvertisementDataSection *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementDataSection", class_name );
+}
+
+static HRESULT WINAPI data_section_GetTrustLevel( IBluetoothLEAdvertisementDataSection *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI data_section_get_DataType( IBluetoothLEAdvertisementDataSection *iface, BYTE *value )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = impl->type;
+    return S_OK;
+}
+
+static HRESULT WINAPI data_section_put_DataType( IBluetoothLEAdvertisementDataSection *iface, BYTE value )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    TRACE( "(%p, %u)\n", iface, value );
+    impl->type = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI data_section_get_Data( IBluetoothLEAdvertisementDataSection *iface, IBuffer **value )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    if ((*value = impl->data)) IBuffer_AddRef( *value );
+    return S_OK;
+}
+
+static HRESULT WINAPI data_section_put_Data( IBluetoothLEAdvertisementDataSection *iface, IBuffer *value )
+{
+    struct data_section *impl = impl_from_IBluetoothLEAdvertisementDataSection( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    if (value) IBuffer_AddRef( value );
+    if (impl->data) IBuffer_Release( impl->data );
+    impl->data = value;
+    return S_OK;
+}
+
+static const IBluetoothLEAdvertisementDataSectionVtbl data_section_vtbl =
+{
+    data_section_QueryInterface,
+    data_section_AddRef,
+    data_section_Release,
+    data_section_GetIids,
+    data_section_GetRuntimeClassName,
+    data_section_GetTrustLevel,
+    data_section_get_DataType,
+    data_section_put_DataType,
+    data_section_get_Data,
+    data_section_put_Data,
+};
+
+HRESULT data_section_create( BYTE type, const BYTE *data, UINT32 size, IBluetoothLEAdvertisementDataSection **out )
+{
+    struct data_section *impl;
+    HRESULT hr;
+
+    if (!(impl = calloc( 1, sizeof( *impl ) ))) return E_OUTOFMEMORY;
+    impl->IBluetoothLEAdvertisementDataSection_iface.lpVtbl = &data_section_vtbl;
+    impl->ref = 1;
+    impl->type = type;
+    if (FAILED((hr = buffer_create( data, size, &impl->data ))))
+    {
+        free( impl );
+        return hr;
+    }
+    *out = &impl->IBluetoothLEAdvertisementDataSection_iface;
     return S_OK;
 }
 

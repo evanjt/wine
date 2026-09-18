@@ -70,6 +70,8 @@ HRESULT vector_create( const struct vector_iids *iids, void **out );
 
 struct guid_vector;
 HRESULT guid_vector_create( const GUID *items, UINT32 count, BOOL view, struct guid_vector **out );
+HRESULT manufacturer_data_create( UINT16 company_id, const BYTE *data, UINT32 size, IBluetoothLEManufacturerData **out );
+HRESULT data_section_create( BYTE type, const BYTE *data, UINT32 size, IBluetoothLEAdvertisementDataSection **out );
 
 HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
 
