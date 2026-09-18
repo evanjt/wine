@@ -66,6 +66,47 @@ struct winebth_radio_start_discovery_params
     unsigned int le : 1;
 };
 
+#define WINEBTH_LE_ADV_MAX_UUIDS             16
+#define WINEBTH_LE_ADV_MAX_MANUFACTURER_DATA 2
+#define WINEBTH_LE_ADV_MAX_SERVICE_DATA      2
+#define WINEBTH_LE_ADV_MAX_DATA              128
+
+#define WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS 0x01
+#define WINEBTH_LE_ADV_FLAG_RSSI           0x02
+#define WINEBTH_LE_ADV_FLAG_TX_POWER       0x04
+#define WINEBTH_LE_ADV_FLAG_APPEARANCE     0x08
+#define WINEBTH_LE_ADV_FLAG_NAME           0x10
+
+struct winebth_le_manufacturer_data
+{
+    UINT16 company_id;
+    UINT16 size;
+    BYTE data[WINEBTH_LE_ADV_MAX_DATA];
+};
+
+struct winebth_le_service_data
+{
+    GUID uuid;
+    UINT16 size;
+    BYTE data[WINEBTH_LE_ADV_MAX_DATA];
+};
+
+struct winebth_le_advertisement
+{
+    BTH_ADDR address;
+    UINT32 flags;
+    INT16 rssi;
+    INT16 tx_power;
+    UINT16 appearance;
+    CHAR name[BLUETOOTH_MAX_NAME_SIZE];
+    UINT16 uuid_count;
+    GUID uuids[WINEBTH_LE_ADV_MAX_UUIDS];
+    UINT16 manufacturer_data_count;
+    struct winebth_le_manufacturer_data manufacturer_data[WINEBTH_LE_ADV_MAX_MANUFACTURER_DATA];
+    UINT16 service_data_count;
+    struct winebth_le_service_data service_data[WINEBTH_LE_ADV_MAX_SERVICE_DATA];
+};
+
 /* Associated data for GUID_WINEBTH_AUTHENTICATION_REQUEST events. */
 struct winebth_authentication_request
 {

@@ -1222,6 +1222,31 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                     device->props.trusted = event.props.trusted;
                 if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_CLASS)
                     device->props.class = event.props.class;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_RSSI)
+                    device->props.le.rssi = event.props.le.rssi;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_TX_POWER)
+                    device->props.le.tx_power = event.props.le.tx_power;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_APPEARANCE)
+                    device->props.le.appearance = event.props.le.appearance;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE)
+                    device->props.le.flags = event.props.le.flags & WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS;
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_UUIDS)
+                {
+                    device->props.le.uuid_count = event.props.le.uuid_count;
+                    memcpy( device->props.le.uuids, event.props.le.uuids, sizeof( device->props.le.uuids ) );
+                }
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_MANUFACTURER_DATA)
+                {
+                    device->props.le.manufacturer_data_count = event.props.le.manufacturer_data_count;
+                    memcpy( device->props.le.manufacturer_data, event.props.le.manufacturer_data,
+                            sizeof( device->props.le.manufacturer_data ) );
+                }
+                if (event.changed_props_mask & WINEBLUETOOTH_DEVICE_PROPERTY_SERVICE_DATA)
+                {
+                    device->props.le.service_data_count = event.props.le.service_data_count;
+                    memcpy( device->props.le.service_data, event.props.le.service_data,
+                            sizeof( device->props.le.service_data ) );
+                }
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &device_new_info );
                 bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, device->props_mask );
                 LeaveCriticalSection( &device->props_cs );
