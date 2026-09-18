@@ -170,6 +170,8 @@ struct ble_device
     IBluetoothLEDevice IBluetoothLEDevice_iface;
     IBluetoothLEDevice2 IBluetoothLEDevice2_iface;
     IBluetoothLEDevice3 IBluetoothLEDevice3_iface;
+    IBluetoothLEDevice4 IBluetoothLEDevice4_iface;
+    IBluetoothLEDevice5 IBluetoothLEDevice5_iface;
     IClosable IClosable_iface;
     HSTRING id;
     UINT64 addr;
@@ -290,6 +292,18 @@ static HRESULT WINAPI ble_device_QueryInterface( IBluetoothLEDevice *iface, REFI
     {
         IBluetoothLEDevice_AddRef( iface );
         *out = &impl->IBluetoothLEDevice3_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice4 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice4_iface;
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice5 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice5_iface;
         return S_OK;
     }
     if (IsEqualGUID( iid, &IID_IClosable ))
@@ -918,6 +932,46 @@ static const IBluetoothLEDevice3Vtbl ble_device3_vtbl =
     ble_device3_GetGattServicesForUuidWithCacheModeAsync,
 };
 
+DEFINE_IINSPECTABLE( ble_device4, IBluetoothLEDevice4, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device4_get_BluetoothDeviceId( IBluetoothLEDevice4 *iface, IBluetoothDeviceId **value )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice4( iface );
+    TRACE( "(%p, %p)\n", iface, value );
+    return bluetoothdeviceid_create( impl->id, value );
+}
+
+static const IBluetoothLEDevice4Vtbl ble_device4_vtbl =
+{
+    ble_device4_QueryInterface,
+    ble_device4_AddRef,
+    ble_device4_Release,
+    ble_device4_GetIids,
+    ble_device4_GetRuntimeClassName,
+    ble_device4_GetTrustLevel,
+    ble_device4_get_BluetoothDeviceId,
+};
+
+DEFINE_IINSPECTABLE( ble_device5, IBluetoothLEDevice5, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device5_get_WasSecureConnectionUsedForPairing( IBluetoothLEDevice5 *iface, boolean *value )
+{
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = FALSE;
+    return S_OK;
+}
+
+static const IBluetoothLEDevice5Vtbl ble_device5_vtbl =
+{
+    ble_device5_QueryInterface,
+    ble_device5_AddRef,
+    ble_device5_Release,
+    ble_device5_GetIids,
+    ble_device5_GetRuntimeClassName,
+    ble_device5_GetTrustLevel,
+    ble_device5_get_WasSecureConnectionUsedForPairing,
+};
+
 static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, UINT64 addr )
 {
     struct ble_device *impl;
@@ -944,6 +998,8 @@ static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, 
     impl->IBluetoothLEDevice_iface.lpVtbl = &ble_device_vtbl;
     impl->IBluetoothLEDevice2_iface.lpVtbl = &ble_device2_vtbl;
     impl->IBluetoothLEDevice3_iface.lpVtbl = &ble_device3_vtbl;
+    impl->IBluetoothLEDevice4_iface.lpVtbl = &ble_device4_vtbl;
+    impl->IBluetoothLEDevice5_iface.lpVtbl = &ble_device5_vtbl;
     impl->IClosable_iface.lpVtbl = &ble_device_closable_vtbl;
     InitializeCriticalSectionEx( &impl->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     *device = &impl->IBluetoothLEDevice_iface;
