@@ -72,6 +72,8 @@ struct guid_vector;
 HRESULT guid_vector_create( const GUID *items, UINT32 count, BOOL view, struct guid_vector **out );
 HRESULT manufacturer_data_create( UINT16 company_id, const BYTE *data, UINT32 size, IBluetoothLEManufacturerData **out );
 HRESULT data_section_create( BYTE type, const BYTE *data, UINT32 size, IBluetoothLEAdvertisementDataSection **out );
+struct winebth_le_advertisement;
+HRESULT advertisement_create( const struct winebth_le_advertisement *adv, IBluetoothLEAdvertisement **out );
 
 HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
 
