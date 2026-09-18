@@ -68,6 +68,9 @@ struct vector_iids
 };
 HRESULT vector_create( const struct vector_iids *iids, void **out );
 
+struct guid_vector;
+HRESULT guid_vector_create( const GUID *items, UINT32 count, BOOL view, struct guid_vector **out );
+
 HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \
