@@ -2277,6 +2277,30 @@ static void winebluetooth_watcher_event_free( enum winebluetooth_watcher_event_t
     }
 }
 
+/* ROUVY_BT_ADAPTER names the one adapter to expose, as its hci name or address. Unset means every adapter. */
+static BOOL bluez_adapter_selected( const char *path, const struct winebluetooth_radio_properties *props,
+                                    winebluetooth_radio_props_mask_t mask )
+{
+    const char *wanted = getenv( "ROUVY_BT_ADAPTER" );
+    const char *name = strrchr( path, '/' );
+    char address[18] = "";
+
+    if (!wanted || !*wanted) return TRUE;
+    name = name ? name + 1 : path;
+    if (mask & WINEBLUETOOTH_RADIO_PROPERTY_ADDRESS)
+    {
+        const BYTE *a = props->address.rgBytes;
+        snprintf( address, sizeof( address ), "%02x:%02x:%02x:%02x:%02x:%02x", a[0], a[1], a[2], a[3], a[4], a[5] );
+    }
+    if (!strcasecmp( wanted, name ) || (*address && !strcasecmp( wanted, address )))
+    {
+        MESSAGE( "winebth: using Bluetooth adapter %s (%s), ROUVY_BT_ADAPTER=%s\n", name, address, wanted );
+        return TRUE;
+    }
+    MESSAGE( "winebth: ignoring Bluetooth adapter %s (%s), ROUVY_BT_ADAPTER=%s\n", name, address, wanted );
+    return FALSE;
+}
+
 /* Examine a new BlueZ DBus object available at path and queue a BLUETOOTH_WATCHER_* event if it is an object we
  * are interested in.
  * ifaces_iter should point to the start of the interfaces + properties dict.
@@ -2312,6 +2336,12 @@ static BOOL bluez_handle_new_object( DBusMessage *msg, const char *path, DBusMes
                 bluez_radio_prop_from_dict_entry( prop_name, &variant, &event.radio_added.props,
                                                   &event.radio_added.props_mask,
                                                   WINEBLUETOOTH_RADIO_ALL_PROPERTIES );
+            }
+            if (!bluez_adapter_selected( path, &event.radio_added.props, event.radio_added.props_mask ))
+            {
+                unix_name_free( (struct unix_name *)event.radio_added.radio.handle );
+                event.radio_added.radio.handle = 0;
+                break;
             }
             event_type = BLUETOOTH_WATCHER_EVENT_TYPE_RADIO_ADDED;
             new_object = TRUE;
