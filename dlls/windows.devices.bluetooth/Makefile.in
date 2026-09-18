@@ -10,4 +10,5 @@ SOURCES = \
 	classes.idl \
 	gatt.c \
 	main.c \
+	pairing.c \
 	vector.c

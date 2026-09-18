@@ -33,8 +33,20 @@ namespace Windows.Devices.Enumeration {
     typedef enum DeviceWatcherStatus DeviceWatcherStatus;
     typedef enum Panel Panel;
     typedef enum DeviceAccessStatus DeviceAccessStatus;
+    typedef enum DevicePairingKinds DevicePairingKinds;
+    typedef enum DevicePairingProtectionLevel DevicePairingProtectionLevel;
+    typedef enum DevicePairingResultStatus DevicePairingResultStatus;
+    typedef enum DeviceUnpairingResultStatus DeviceUnpairingResultStatus;
 
     interface IDeviceInformation;
+    interface IDeviceInformation2;
+    interface IDeviceInformationCustomPairing;
+    interface IDeviceInformationPairing;
+    interface IDeviceInformationPairing2;
+    interface IDevicePairingRequestedEventArgs;
+    interface IDevicePairingResult;
+    interface IDevicePairingSettings;
+    interface IDeviceUnpairingResult;
     interface IDeviceInformationStatics;
     interface IDeviceInformationStatics2;
     interface IDeviceInformationUpdate;
@@ -42,6 +54,11 @@ namespace Windows.Devices.Enumeration {
 
     runtimeclass DeviceInformation;
     runtimeclass DeviceInformationCollection;
+    runtimeclass DeviceInformationCustomPairing;
+    runtimeclass DeviceInformationPairing;
+    runtimeclass DevicePairingRequestedEventArgs;
+    runtimeclass DevicePairingResult;
+    runtimeclass DeviceUnpairingResult;
     runtimeclass DeviceInformationUpdate;
     runtimeclass DeviceThumbnail;
     runtimeclass DeviceWatcher;
@@ -57,14 +74,19 @@ namespace Windows.Devices.Enumeration {
         interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Devices.Enumeration.DeviceInformation *>;
         interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Devices.Enumeration.DeviceInformationCollection *>;
         interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Devices.Enumeration.DeviceThumbnail *>;
+        interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Devices.Enumeration.DevicePairingResult *>;
+        interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Devices.Enumeration.DeviceUnpairingResult *>;
         interface Windows.Foundation.Collections.IMapView<HSTRING, IInspectable *>;
         interface Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceInformation *>;
         interface Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceInformationCollection *>;
         interface Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceThumbnail *>;
+        interface Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *>;
+        interface Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceUnpairingResult *>;
         interface Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceWatcher *, IInspectable *>;
         interface Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceWatcher *, Windows.Devices.Enumeration.DeviceInformation *>;
         interface Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceWatcher *, Windows.Devices.Enumeration.DeviceInformationUpdate *>;
         interface Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceAccessInformation *, Windows.Devices.Enumeration.DeviceAccessChangedEventArgs *>;
+        interface Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceInformationCustomPairing *, Windows.Devices.Enumeration.DevicePairingRequestedEventArgs *>;
     }
 }
 
@@ -129,6 +151,67 @@ namespace Windows.Devices.Enumeration {
     };
 
     [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        flags
+    ]
+    enum DevicePairingKinds
+    {
+        None                      = 0x0,
+        ConfirmOnly               = 0x1,
+        DisplayPin                = 0x2,
+        ProvidePin                = 0x4,
+        ConfirmPinMatch           = 0x8,
+        [contract(Windows.Foundation.UniversalApiContract, 7.0)]
+        ProvidePasswordCredential = 0x10,
+        [contract(Windows.Foundation.UniversalApiContract, 16.0)]
+        ProvideAddress            = 0x20,
+    };
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum DevicePairingProtectionLevel
+    {
+        Default                     = 0,
+        None                        = 1,
+        Encryption                  = 2,
+        EncryptionAndAuthentication = 3,
+    };
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum DevicePairingResultStatus
+    {
+        Paired                       = 0,
+        NotReadyToPair               = 1,
+        NotPaired                    = 2,
+        AlreadyPaired                = 3,
+        ConnectionRejected           = 4,
+        TooManyConnections           = 5,
+        HardwareFailure              = 6,
+        AuthenticationTimeout        = 7,
+        AuthenticationNotAllowed     = 8,
+        AuthenticationFailure        = 9,
+        NoSupportedProfiles          = 10,
+        ProtectionLevelCouldNotBeMet = 11,
+        AccessDenied                 = 12,
+        InvalidCeremonyData          = 13,
+        PairingCanceled              = 14,
+        OperationAlreadyInProgress   = 15,
+        RequiredHandlerNotRegistered = 16,
+        RejectedByHandler            = 17,
+        RemoteDeviceHasAssociation   = 18,
+        Failed                       = 19,
+    };
+
+    [contract(Windows.Foundation.UniversalApiContract, 1.0)]
+    enum DeviceUnpairingResultStatus
+    {
+        Unpaired                   = 0,
+        AlreadyUnpaired            = 1,
+        OperationAlreadyInProgress = 2,
+        AccessDenied               = 3,
+        Failed                     = 4,
+    };
+
+    [
         exclusiveto(Windows.Devices.Enumeration.DeviceInformation),
         uuid(aba0fb95-4398-489d-8e44-e6130927011f)
     ]
@@ -143,6 +226,117 @@ namespace Windows.Devices.Enumeration {
         HRESULT Update([in] Windows.Devices.Enumeration.DeviceInformationUpdate *info);
         HRESULT GetThumbnailAsync([out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceThumbnail *> **operation);
         HRESULT GetGlyphThumbnailAsync([out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceThumbnail *> **operation);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DeviceInformation),
+        uuid(f156a638-7997-48d9-a10c-269d46533f48)
+    ]
+    interface IDeviceInformation2 : IInspectable
+    {
+        [propget] HRESULT Kind([out, retval] Windows.Devices.Enumeration.DeviceInformationKind *value);
+        [propget] HRESULT Pairing([out, retval] Windows.Devices.Enumeration.DeviceInformationPairing **value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DevicePairingResult),
+        uuid(072b02bf-dd95-4025-9b37-de51adba37b7)
+    ]
+    interface IDevicePairingResult : IInspectable
+    {
+        [propget] HRESULT Status([out, retval] Windows.Devices.Enumeration.DevicePairingResultStatus *value);
+        [propget] HRESULT ProtectionLevelUsed([out, retval] Windows.Devices.Enumeration.DevicePairingProtectionLevel *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DeviceUnpairingResult),
+        uuid(66f44ad3-79d9-444b-92cf-a92ef72571c7)
+    ]
+    interface IDeviceUnpairingResult : IInspectable
+    {
+        [propget] HRESULT Status([out, retval] Windows.Devices.Enumeration.DeviceUnpairingResultStatus *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        uuid(482cb27c-83bb-420e-be51-6602b222de54)
+    ]
+    interface IDevicePairingSettings : IInspectable
+    {
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DevicePairingRequestedEventArgs),
+        uuid(f717fc56-de6b-487f-8376-0180aca69963)
+    ]
+    interface IDevicePairingRequestedEventArgs : IInspectable
+    {
+        [propget] HRESULT DeviceInformation([out, retval] Windows.Devices.Enumeration.DeviceInformation **value);
+        [propget] HRESULT PairingKind([out, retval] Windows.Devices.Enumeration.DevicePairingKinds *value);
+        [propget] HRESULT Pin([out, retval] HSTRING *value);
+        [overload("Accept")] HRESULT Accept();
+        [overload("Accept")] HRESULT AcceptWithPin([in] HSTRING pin);
+        HRESULT GetDeferral([out, retval] Windows.Foundation.Deferral **result);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DeviceInformationCustomPairing),
+        uuid(85138c02-4ee6-4914-8370-107a39144c0e)
+    ]
+    interface IDeviceInformationCustomPairing : IInspectable
+    {
+        [overload("PairAsync")]
+        HRESULT PairAsync([in] Windows.Devices.Enumeration.DevicePairingKinds pairing_kinds_supported,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+        [overload("PairAsync")]
+        HRESULT PairWithProtectionLevelAsync([in] Windows.Devices.Enumeration.DevicePairingKinds pairing_kinds_supported,
+                [in] Windows.Devices.Enumeration.DevicePairingProtectionLevel min_protection_level,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+        [overload("PairAsync")]
+        HRESULT PairWithProtectionLevelAndSettingsAsync([in] Windows.Devices.Enumeration.DevicePairingKinds pairing_kinds_supported,
+                [in] Windows.Devices.Enumeration.DevicePairingProtectionLevel min_protection_level,
+                [in] Windows.Devices.Enumeration.IDevicePairingSettings *device_pairing_settings,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+        [eventadd] HRESULT PairingRequested([in] Windows.Foundation.TypedEventHandler<Windows.Devices.Enumeration.DeviceInformationCustomPairing *,
+                Windows.Devices.Enumeration.DevicePairingRequestedEventArgs *> *handler, [out, retval] EventRegistrationToken *token);
+        [eventremove] HRESULT PairingRequested([in] EventRegistrationToken token);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DeviceInformationPairing),
+        uuid(2c4769f5-f684-40d5-8469-e8dbaab70485)
+    ]
+    interface IDeviceInformationPairing : IInspectable
+    {
+        [propget] HRESULT IsPaired([out, retval] boolean *value);
+        [propget] HRESULT CanPair([out, retval] boolean *value);
+        [overload("PairAsync")]
+        HRESULT PairAsync([out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+        [overload("PairAsync")]
+        HRESULT PairWithProtectionLevelAsync([in] Windows.Devices.Enumeration.DevicePairingProtectionLevel min_protection_level,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Enumeration.DeviceInformationPairing),
+        uuid(f68612fd-0aee-4328-85cc-1c742bb1790d)
+    ]
+    interface IDeviceInformationPairing2 : IInspectable
+    {
+        [propget] HRESULT ProtectionLevel([out, retval] Windows.Devices.Enumeration.DevicePairingProtectionLevel *value);
+        [propget] HRESULT Custom([out, retval] Windows.Devices.Enumeration.DeviceInformationCustomPairing **value);
+        [overload("PairAsync")]
+        HRESULT PairWithProtectionLevelAndSettingsAsync([in] Windows.Devices.Enumeration.DevicePairingProtectionLevel min_protection_level,
+                [in] Windows.Devices.Enumeration.IDevicePairingSettings *device_pairing_settings,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DevicePairingResult *> **result);
+        HRESULT UnpairAsync([out, retval] Windows.Foundation.IAsyncOperation<Windows.Devices.Enumeration.DeviceUnpairingResult *> **result);
     }
 
     [
@@ -310,7 +504,58 @@ namespace Windows.Devices.Enumeration {
     runtimeclass DeviceInformation
     {
         [default] interface Windows.Devices.Enumeration.IDeviceInformation;
-        /* [contract(Windows.Foundation.UniversalApiContract, 1.0)] interface Windows.Devices.Enumeration.IDeviceInformation2; */
+        [contract(Windows.Foundation.UniversalApiContract, 1.0)] interface Windows.Devices.Enumeration.IDeviceInformation2;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass DeviceInformationPairing
+    {
+        [default] interface Windows.Devices.Enumeration.IDeviceInformationPairing;
+        [contract(Windows.Foundation.UniversalApiContract, 1.0)] interface Windows.Devices.Enumeration.IDeviceInformationPairing2;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass DeviceInformationCustomPairing
+    {
+        [default] interface Windows.Devices.Enumeration.IDeviceInformationCustomPairing;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass DevicePairingRequestedEventArgs
+    {
+        [default] interface Windows.Devices.Enumeration.IDevicePairingRequestedEventArgs;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass DevicePairingResult
+    {
+        [default] interface Windows.Devices.Enumeration.IDevicePairingResult;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass DeviceUnpairingResult
+    {
+        [default] interface Windows.Devices.Enumeration.IDeviceUnpairingResult;
     }
 
     [

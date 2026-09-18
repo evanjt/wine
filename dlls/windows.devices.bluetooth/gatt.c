@@ -34,28 +34,13 @@ WINE_DEFAULT_DEBUG_CHANNEL( bluetooth );
 
 /* --- Shared helpers --- */
 
-struct event_handler
-{
-    IUnknown *handler;
-    INT64 token;
-};
-
-struct event_handlers
-{
-    CRITICAL_SECTION cs;
-    struct event_handler *entries;
-    UINT32 count;
-    UINT32 capacity;
-    INT64 next_token;
-};
-
-static void event_handlers_init( struct event_handlers *handlers )
+void event_handlers_init( struct event_handlers *handlers )
 {
     memset( handlers, 0, sizeof( *handlers ) );
     InitializeCriticalSectionEx( &handlers->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
 }
 
-static void event_handlers_free( struct event_handlers *handlers )
+void event_handlers_free( struct event_handlers *handlers )
 {
     UINT32 i;
     for (i = 0; i < handlers->count; i++) IUnknown_Release( handlers->entries[i].handler );
@@ -63,7 +48,7 @@ static void event_handlers_free( struct event_handlers *handlers )
     DeleteCriticalSection( &handlers->cs );
 }
 
-static HRESULT event_handlers_add( struct event_handlers *handlers, IUnknown *handler, EventRegistrationToken *token )
+HRESULT event_handlers_add( struct event_handlers *handlers, IUnknown *handler, EventRegistrationToken *token )
 {
     struct event_handler *entry;
 
@@ -88,7 +73,7 @@ static HRESULT event_handlers_add( struct event_handlers *handlers, IUnknown *ha
     return S_OK;
 }
 
-static HRESULT event_handlers_remove( struct event_handlers *handlers, EventRegistrationToken token )
+HRESULT event_handlers_remove( struct event_handlers *handlers, EventRegistrationToken token )
 {
     IUnknown *handler = NULL;
     UINT32 i;
@@ -107,7 +92,7 @@ static HRESULT event_handlers_remove( struct event_handlers *handlers, EventRegi
     return S_OK;
 }
 
-static UINT32 event_handlers_snapshot( struct event_handlers *handlers, IUnknown ***out )
+UINT32 event_handlers_snapshot( struct event_handlers *handlers, IUnknown ***out )
 {
     UINT32 i, count;
 

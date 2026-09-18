@@ -84,6 +84,29 @@ HRESULT stopped_args_create( BluetoothError error, IBluetoothLEAdvertisementWatc
 HRESULT async_operation_uint32_create( const GUID *iid, IUnknown *invoker, IUnknown *param,
                                        async_operation_callback callback, IAsyncOperation_IInspectable **out );
 
+struct event_handler
+{
+    IUnknown *handler;
+    INT64 token;
+};
+
+struct event_handlers
+{
+    CRITICAL_SECTION cs;
+    struct event_handler *entries;
+    UINT32 count;
+    UINT32 capacity;
+    INT64 next_token;
+};
+
+void event_handlers_init( struct event_handlers *handlers );
+void event_handlers_free( struct event_handlers *handlers );
+HRESULT event_handlers_add( struct event_handlers *handlers, IUnknown *handler, EventRegistrationToken *token );
+HRESULT event_handlers_remove( struct event_handlers *handlers, EventRegistrationToken token );
+UINT32 event_handlers_snapshot( struct event_handlers *handlers, IUnknown ***out );
+HRESULT device_information_create( HSTRING id, HSTRING name, UINT64 addr, IDeviceInformation **out );
+HRESULT device_pairing_create( HSTRING id, HSTRING name, UINT64 addr, IDeviceInformationPairing **out );
+
 HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out );
 HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
 HRESULT class_name_string( const WCHAR *name, HSTRING *out );

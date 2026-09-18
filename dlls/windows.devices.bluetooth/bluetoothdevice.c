@@ -626,9 +626,13 @@ DEFINE_IINSPECTABLE( ble_device2, IBluetoothLEDevice2, struct ble_device, IBluet
 struct device_information
 {
     IDeviceInformation IDeviceInformation_iface;
+    IDeviceInformation2 IDeviceInformation2_iface;
     LONG ref;
     HSTRING id;
     HSTRING name;
+    UINT64 addr;
+    CRITICAL_SECTION cs;
+    IDeviceInformationPairing *pairing; /* Guarded by cs, created on the first Pairing call */
 };
 
 static inline struct device_information *impl_from_IDeviceInformation( IDeviceInformation *iface )
@@ -648,6 +652,12 @@ static HRESULT WINAPI device_information_QueryInterface( IDeviceInformation *ifa
         IDeviceInformation_AddRef(( *out = &impl->IDeviceInformation_iface ));
         return S_OK;
     }
+    if (IsEqualGUID( iid, &IID_IDeviceInformation2 ))
+    {
+        IDeviceInformation_AddRef( iface );
+        *out = &impl->IDeviceInformation2_iface;
+        return S_OK;
+    }
     *out = NULL;
     FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
     return E_NOINTERFACE;
@@ -665,6 +675,8 @@ static ULONG WINAPI device_information_Release( IDeviceInformation *iface )
     ULONG ref = InterlockedDecrement( &impl->ref );
     if (!ref)
     {
+        if (impl->pairing) IDeviceInformationPairing_Release( impl->pairing );
+        DeleteCriticalSection( &impl->cs );
         WindowsDeleteString( impl->id );
         WindowsDeleteString( impl->name );
         free( impl );
@@ -768,25 +780,74 @@ static const IDeviceInformationVtbl device_information_vtbl =
     device_information_GetGlyphThumbnailAsync,
 };
 
-static HRESULT WINAPI ble_device2_get_DeviceInformation( IBluetoothLEDevice2 *iface, IDeviceInformation **value )
+DEFINE_IINSPECTABLE( device_information2, IDeviceInformation2, struct device_information, IDeviceInformation_iface )
+
+/* An LE device id names an association endpoint, the same kind Windows gives BluetoothLE# ids. */
+static HRESULT WINAPI device_information2_get_Kind( IDeviceInformation2 *iface, DeviceInformationKind *value )
 {
-    struct ble_device *impl = impl_from_IBluetoothLEDevice2( iface );
-    struct device_information *info;
-    HRESULT hr;
+    TRACE( "(%p, %p)\n", iface, value );
+    *value = DeviceInformationKind_AssociationEndpoint;
+    return S_OK;
+}
+
+static HRESULT WINAPI device_information2_get_Pairing( IDeviceInformation2 *iface, IDeviceInformationPairing **value )
+{
+    struct device_information *impl = impl_from_IDeviceInformation2( iface );
+    HRESULT hr = S_OK;
 
     TRACE( "(%p, %p)\n", iface, value );
 
+    EnterCriticalSection( &impl->cs );
+    if (impl->pairing || SUCCEEDED(hr = device_pairing_create( impl->id, impl->name, impl->addr, &impl->pairing )))
+        IDeviceInformationPairing_AddRef(( *value = impl->pairing ));
+    LeaveCriticalSection( &impl->cs );
+    return hr;
+}
+
+static const IDeviceInformation2Vtbl device_information2_vtbl =
+{
+    device_information2_QueryInterface,
+    device_information2_AddRef,
+    device_information2_Release,
+    device_information2_GetIids,
+    device_information2_GetRuntimeClassName,
+    device_information2_GetTrustLevel,
+    device_information2_get_Kind,
+    device_information2_get_Pairing,
+};
+
+HRESULT device_information_create( HSTRING id, HSTRING name, UINT64 addr, IDeviceInformation **out )
+{
+    struct device_information *info;
+    HRESULT hr;
+
     if (!(info = calloc( 1, sizeof( *info ) ))) return E_OUTOFMEMORY;
     info->IDeviceInformation_iface.lpVtbl = &device_information_vtbl;
+    info->IDeviceInformation2_iface.lpVtbl = &device_information2_vtbl;
     info->ref = 1;
-    if (FAILED((hr = WindowsDuplicateString( impl->id, &info->id ))) ||
-        FAILED((hr = IBluetoothLEDevice_get_Name( &impl->IBluetoothLEDevice_iface, &info->name ))))
+    info->addr = addr;
+    InitializeCriticalSectionEx( &info->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
+    if (FAILED((hr = WindowsDuplicateString( id, &info->id ))) || FAILED((hr = WindowsDuplicateString( name, &info->name ))))
     {
         IDeviceInformation_Release( &info->IDeviceInformation_iface );
         return hr;
     }
-    *value = &info->IDeviceInformation_iface;
+    *out = &info->IDeviceInformation_iface;
     return S_OK;
+}
+
+static HRESULT WINAPI ble_device2_get_DeviceInformation( IBluetoothLEDevice2 *iface, IDeviceInformation **value )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice2( iface );
+    HSTRING name;
+    HRESULT hr;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
+    if (FAILED(hr = IBluetoothLEDevice_get_Name( &impl->IBluetoothLEDevice_iface, &name ))) return hr;
+    hr = device_information_create( impl->id, name, impl->addr, value );
+    WindowsDeleteString( name );
+    return hr;
 }
 
 static HRESULT WINAPI ble_device2_get_Appearance( IBluetoothLEDevice2 *iface, IBluetoothLEAppearance **value )
