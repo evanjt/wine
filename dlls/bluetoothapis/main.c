@@ -1010,11 +1010,11 @@ DWORD WINAPI BluetoothSendAuthenticationResponseEx( HANDLE handle_radio, BLUETOO
     switch (auth_response->authMethod)
     {
     case BLUETOOTH_AUTHENTICATION_METHOD_NUMERIC_COMPARISON:
+    case BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY_NOTIFICATION:
+    case BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY:
         break;
     case BLUETOOTH_AUTHENTICATION_METHOD_LEGACY:
     case BLUETOOTH_AUTHENTICATION_METHOD_OOB:
-    case BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY_NOTIFICATION:
-    case BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY:
         FIXME( "Unsupported authMethod: %d\n", auth_response->authMethod );
         return ERROR_CALL_NOT_IMPLEMENTED;
     default:
@@ -1054,7 +1054,9 @@ DWORD WINAPI BluetoothSendAuthenticationResponseEx( HANDLE handle_radio, BLUETOO
     }
     params.address = RtlUlonglongByteSwap( auth_response->bthAddressRemote.ullLong ) >> 16;
     params.method = auth_response->authMethod;
-    params.numeric_value_or_passkey = auth_response->numericCompInfo.NumericValue;
+    params.numeric_value_or_passkey = auth_response->authMethod == BLUETOOTH_AUTHENTICATION_METHOD_PASSKEY
+                                          ? auth_response->passkeyInfo.passkey
+                                          : auth_response->numericCompInfo.NumericValue;
     params.negative = !!auth_response->negativeResponse;
 
     if (!DeviceIoControl( handle_radio, IOCTL_WINEBTH_RADIO_SEND_AUTH_RESPONSE, &params, sizeof( params ),
