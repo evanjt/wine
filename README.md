@@ -1,3 +1,18 @@
+> **This is a fork of Wine. The upstream project is at
+> [gitlab.winehq.org/wine/wine](https://gitlab.winehq.org/wine/wine).**
+>
+> This fork adds Bluetooth LE support to `winebth.sys` and
+> `windows.devices.bluetooth`, so that Rouvy can pair with trainers and
+> sensors on Linux. The `main` branch tracks upstream Wine with those
+> changes merged in.
+>
+> **For build scripts, patches and installation, see
+> [rouvy-linux](https://github.com/evanjt/rouvy-linux).**
+>
+> Not affiliated with or endorsed by Rouvy or the Wine project.
+
+---
+
 ## INTRODUCTION
 
 Wine is a program which allows running Microsoft Windows programs
