@@ -587,8 +587,12 @@ static NTSTATUS bluetooth_radio_dispatch( DEVICE_OBJECT *device, struct bluetoot
         break;
     }
     case IOCTL_WINEBTH_RADIO_START_DISCOVERY:
-        status = winebluetooth_radio_start_discovery( ext->radio );
+    {
+        const struct winebth_radio_start_discovery_params *params = irp->AssociatedIrp.SystemBuffer;
+        BOOL le = params && insize >= sizeof( *params ) && params->le;
+        status = winebluetooth_radio_start_discovery( ext->radio, le );
         break;
+    }
     case IOCTL_WINEBTH_RADIO_STOP_DISCOVERY:
         status = winebluetooth_radio_stop_discovery( ext->radio );
         break;

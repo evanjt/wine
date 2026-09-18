@@ -509,15 +509,15 @@ static NTSTATUS bluez_adapter_set_discovery_filter( void *connection, const char
 
 }
 
-NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path )
+NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path, BOOL le )
 {
     DBusMessage *request, *reply;
     DBusError error;
     NTSTATUS status;
 
-    TRACE( "(%p, %s)\n", connection, debugstr_a( adapter_path ) );
+    TRACE( "(%p, %s, %d)\n", connection, debugstr_a( adapter_path ), le );
 
-    status = bluez_adapter_set_discovery_filter( connection, adapter_path, "bredr" );
+    status = bluez_adapter_set_discovery_filter( connection, adapter_path, le ? "le" : "bredr" );
     if (status != STATUS_SUCCESS) return status;
 
     request = p_dbus_message_new_method_call( BLUEZ_DEST, adapter_path, BLUEZ_INTERFACE_ADAPTER,
@@ -2743,7 +2743,7 @@ NTSTATUS bluez_adapter_set_prop( void *connection, struct bluetooth_adapter_set_
 {
     return STATUS_NOT_SUPPORTED;
 }
-NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path )
+NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path, BOOL le )
 {
     return STATUS_NOT_SUPPORTED;
 }

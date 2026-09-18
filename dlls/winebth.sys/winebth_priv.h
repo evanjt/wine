@@ -169,7 +169,6 @@ typedef UINT16 winebluetooth_device_props_mask_t;
 #define WINEBLUETOOTH_DEVICE_PROPERTY_LEGACY_PAIRING (1 << 4)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_TRUSTED        (1 << 5)
 #define WINEBLUETOOTH_DEVICE_PROPERTY_CLASS          (1 << 6)
-
 #define WINEBLUETOOTH_DEVICE_ALL_PROPERTIES                                                 \
     (WINEBLUETOOTH_DEVICE_PROPERTY_NAME | WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS |           \
      WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED | WINEBLUETOOTH_DEVICE_PROPERTY_PAIRED |       \
@@ -229,7 +228,7 @@ static inline BOOL winebluetooth_radio_equal( winebluetooth_radio_t r1, wineblue
 NTSTATUS winebluetooth_radio_set_property( winebluetooth_radio_t radio,
                                            ULONG prop_flag,
                                            union winebluetooth_property *property );
-NTSTATUS winebluetooth_radio_start_discovery( winebluetooth_radio_t radio );
+NTSTATUS winebluetooth_radio_start_discovery( winebluetooth_radio_t radio, BOOL le );
 NTSTATUS winebluetooth_radio_stop_discovery( winebluetooth_radio_t radio );
 NTSTATUS winebluetooth_radio_remove_device( winebluetooth_radio_t radio, winebluetooth_device_t device );
 NTSTATUS winebluetooth_auth_agent_enable_incoming( void );

@@ -114,6 +114,7 @@ struct bluetooth_adapter_set_prop_params
 struct bluetooth_adapter_start_discovery_params
 {
     unix_name_t adapter;
+    BOOL le;
 };
 
 struct bluetooth_adapter_stop_discovery_params

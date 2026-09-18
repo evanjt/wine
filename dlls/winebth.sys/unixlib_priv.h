@@ -49,7 +49,7 @@ extern NTSTATUS bluez_dbus_loop( void *connection, void *watcher_ctx, void *auth
                                  struct winebluetooth_event *result );
 extern NTSTATUS bluez_adapter_set_prop( void *connection,
                                         struct bluetooth_adapter_set_prop_params *params );
-extern NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path );
+extern NTSTATUS bluez_adapter_start_discovery( void *connection, const char *adapter_path, BOOL le );
 extern NTSTATUS bluez_adapter_stop_discovery( void *connection, const char *adapter_path );
 extern NTSTATUS bluez_adapter_remove_device( void *connection, const char *adapter_path, const char *device_path);
 extern NTSTATUS bluez_auth_agent_request_default( void *connection );

@@ -60,6 +60,12 @@ struct winebth_radio_set_flag_params
     unsigned int enable : 1;
 };
 
+/* Optional input for IOCTL_WINEBTH_RADIO_START_DISCOVERY. Without it, only Bluetooth Classic devices are discovered. */
+struct winebth_radio_start_discovery_params
+{
+    unsigned int le : 1;
+};
+
 /* Associated data for GUID_WINEBTH_AUTHENTICATION_REQUEST events. */
 struct winebth_authentication_request
 {
