@@ -1410,6 +1410,13 @@ static void bluetooth_device_set_properties( struct bluetooth_remote_device *dev
     if (mask & WINEBLUETOOTH_DEVICE_PROPERTY_CLASS)
          IoSetDevicePropertyData( device->device_obj, &DEVPKEY_Bluetooth_ClassOfDevice, LOCALE_NEUTRAL, 0,
                                   DEVPROP_TYPE_UINT32, sizeof( props->class ), (void *)&props->class );
+    if (mask & WINEBLUETOOTH_DEVICE_PROPERTY_ADDRESS_TYPE)
+    {
+        BYTE addr_type = props->le.flags & WINEBTH_LE_ADV_FLAG_RANDOM_ADDRESS ? 1 : 0;
+
+        IoSetDevicePropertyData( device->device_obj, (DEVPROPKEY *)&PKEY_Devices_Aep_Bluetooth_Le_AddressType,
+                                 LOCALE_NEUTRAL, 0, DEVPROP_TYPE_BYTE, sizeof( addr_type ), &addr_type );
+    }
     if (mask & WINEBLUETOOTH_DEVICE_PROPERTY_CONNECTED && props->connected)
     {
         FILETIME time = {0};

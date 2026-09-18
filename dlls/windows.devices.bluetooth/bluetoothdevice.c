@@ -26,6 +26,7 @@
 #include "wine/winebth.h"
 #include "initguid.h"
 #include "devpkey.h"
+#include "propkey.h"
 #include "bthledef.h"
 #include "ddk/bthguid.h"
 #include "bluetoothleapis.h"
@@ -795,10 +796,31 @@ static HRESULT WINAPI ble_device2_get_Appearance( IBluetoothLEDevice2 *iface, IB
     return S_OK;
 }
 
+/* The driver records the address type BlueZ reported on the device node. */
 static HRESULT WINAPI ble_device2_get_BluetoothAddressType( IBluetoothLEDevice2 *iface, BluetoothAddressType *value )
 {
-    FIXME( "(%p, %p): semi-stub!\n", iface, value );
+    struct ble_device *impl = impl_from_IBluetoothLEDevice2( iface );
+    SP_DEVICE_INTERFACE_DATA iface_data = { .cbSize = sizeof( iface_data ) };
+    SP_DEVINFO_DATA devinfo_data = { .cbSize = sizeof( devinfo_data ) };
+    BYTE addr_type = 0;
+    DEVPROPTYPE type;
+    HDEVINFO devinfo;
+
+    TRACE( "(%p, %p)\n", iface, value );
+
     *value = BluetoothAddressType_Public;
+    devinfo = SetupDiCreateDeviceInfoList( NULL, NULL );
+    if (devinfo == INVALID_HANDLE_VALUE) return S_OK;
+    if (SetupDiOpenDeviceInterfaceW( devinfo, WindowsGetStringRawBuffer( impl->id, NULL ), 0, &iface_data ) &&
+        (SetupDiGetDeviceInterfaceDetailW( devinfo, &iface_data, NULL, 0, NULL, &devinfo_data ) ||
+         GetLastError() == ERROR_INSUFFICIENT_BUFFER) &&
+        SetupDiGetDevicePropertyW( devinfo, &devinfo_data, (DEVPROPKEY *)&PKEY_Devices_Aep_Bluetooth_Le_AddressType,
+                                   &type, &addr_type, sizeof( addr_type ), NULL, 0 ) &&
+        type == DEVPROP_TYPE_BYTE && addr_type == 1)
+        *value = BluetoothAddressType_Random;
+    else
+        WARN( "no address type recorded for %s, assuming public\n", debugstr_hstring( impl->id ) );
+    SetupDiDestroyDeviceInfoList( devinfo );
     return S_OK;
 }
 
