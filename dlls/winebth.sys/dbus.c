@@ -789,6 +789,24 @@ static void bluez_radio_prop_from_dict_entry( const char *prop_name, DBusMessage
         p_dbus_message_iter_get_basic( variant, &props->version );
         *props_mask |= WINEBLUETOOTH_RADIO_PROPERTY_VERSION;
     }
+    else if (wanted_props_mask & WINEBLUETOOTH_RADIO_PROPERTY_POWERED &&
+             !strcmp( prop_name, "Powered" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_BOOLEAN)
+    {
+        dbus_bool_t powered;
+        p_dbus_message_iter_get_basic( variant, &powered );
+        props->powered = powered != 0;
+        *props_mask |= WINEBLUETOOTH_RADIO_PROPERTY_POWERED;
+    }
+    else if (wanted_props_mask & WINEBLUETOOTH_RADIO_PROPERTY_POWER_STATE &&
+             !strcmp( prop_name, "PowerState" ) &&
+             p_dbus_message_iter_get_arg_type( variant ) == DBUS_TYPE_STRING)
+    {
+        const char *state;
+        p_dbus_message_iter_get_basic( variant, &state );
+        snprintf( props->power_state, sizeof( props->power_state ), "%s", state );
+        *props_mask |= WINEBLUETOOTH_RADIO_PROPERTY_POWER_STATE;
+    }
 }
 
 /* Copy the contents of a DBus "ay" value, truncating to max_size. */
@@ -2584,6 +2602,8 @@ static void bluez_signal_handler( DBusConnection *conn, DBusMessage *msg, const 
                 { "Version", WINEBLUETOOTH_RADIO_PROPERTY_VERSION },
                 { "Discovering", WINEBLUETOOTH_RADIO_PROPERTY_DISCOVERING },
                 { "Pairable", WINEBLUETOOTH_RADIO_PROPERTY_PAIRABLE },
+                { "Powered", WINEBLUETOOTH_RADIO_PROPERTY_POWERED },
+                { "PowerState", WINEBLUETOOTH_RADIO_PROPERTY_POWER_STATE },
             };
             const char *object_path;
 
