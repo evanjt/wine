@@ -169,6 +169,7 @@ struct ble_device
 {
     IBluetoothLEDevice IBluetoothLEDevice_iface;
     IBluetoothLEDevice2 IBluetoothLEDevice2_iface;
+    IBluetoothLEDevice3 IBluetoothLEDevice3_iface;
     IClosable IClosable_iface;
     HSTRING id;
     UINT64 addr;
@@ -285,6 +286,12 @@ static HRESULT WINAPI ble_device_QueryInterface( IBluetoothLEDevice *iface, REFI
         *out = &impl->IBluetoothLEDevice2_iface;
         return S_OK;
     }
+    if (IsEqualGUID( iid, &IID_IBluetoothLEDevice3 ))
+    {
+        IBluetoothLEDevice_AddRef( iface );
+        *out = &impl->IBluetoothLEDevice3_iface;
+        return S_OK;
+    }
     if (IsEqualGUID( iid, &IID_IClosable ))
     {
         IBluetoothLEDevice_AddRef( iface );
@@ -369,7 +376,7 @@ static HRESULT WINAPI ble_device_get_Name( IBluetoothLEDevice *iface, HSTRING *v
     return WindowsCreateString( info.szName, wcslen( info.szName ), value );
 }
 
-static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IVectorView_GattDeviceService **services )
+HRESULT ble_device_get_services_vector( IBluetoothLEDevice *device, const GUID *uuid, IVector_IInspectable **out )
 {
     static const struct vector_iids iids = {
         .vector = &IID_IVector_IInspectable,
@@ -377,19 +384,17 @@ static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IV
         .iterable = &IID_IIterable_GattDeviceService,
         .iterator = &IID_IIterator_GattDeviceService,
     };
-    struct ble_device *impl = impl_from_IBluetoothLEDevice( iface );
+    struct ble_device *impl = impl_from_IBluetoothLEDevice( device );
     BTH_LE_GATT_SERVICE *buf = NULL;
     IVector_IInspectable *vector;
     USHORT actual = 0, i;
     HRESULT hr;
 
-    TRACE( "(%p, %p)\n", iface, services );
-
-    *services = NULL;
+    *out = NULL;
     if (FAILED(hr = vector_create( &iids, (void **)&vector ))) return hr;
+
     hr = BluetoothGATTGetServices( impl->device, 0, NULL, &actual, 0 );
     if (SUCCEEDED( hr ) || hr != HRESULT_FROM_WIN32( ERROR_MORE_DATA )) goto done;
-
     for (;;)
     {
         UINT32 size = actual;
@@ -407,8 +412,20 @@ static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IV
     for (i = 0; i < actual; i++)
     {
         IGattDeviceService *service;
+        GUID svc_uuid;
 
-        if (FAILED(hr = gatt_service_create( &buf[i], impl->device, impl->addr, iface, &service ))) goto done;
+        if (uuid)
+        {
+            if (buf[i].ServiceUuid.IsShortUuid)
+            {
+                svc_uuid = BTH_LE_ATT_BLUETOOTH_BASE_GUID;
+                svc_uuid.Data1 = buf[i].ServiceUuid.Value.ShortUuid;
+            }
+            else
+                svc_uuid = buf[i].ServiceUuid.Value.LongUuid;
+            if (!IsEqualGUID( uuid, &svc_uuid )) continue;
+        }
+        if (FAILED(hr = gatt_service_create( &buf[i], impl->device, impl->addr, device, &service ))) goto done;
         hr = IVector_IInspectable_Append( vector, (IInspectable *)service );
         IGattDeviceService_Release( service );
         if (FAILED( hr )) goto done;
@@ -417,9 +434,23 @@ done:
     free( buf );
     if (FAILED( hr ))
     {
+        WARN( "Failed to enumerate services: %#lx\n", hr );
         IVector_IInspectable_Release( vector );
         return hr;
     }
+    *out = vector;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IVectorView_GattDeviceService **services )
+{
+    IVector_IInspectable *vector;
+    HRESULT hr;
+
+    TRACE( "(%p, %p)\n", iface, services );
+
+    *services = NULL;
+    if (FAILED(hr = ble_device_get_services_vector( iface, NULL, &vector ))) return hr;
     hr = IVector_IInspectable_GetView( vector, (IVectorView_IInspectable **)services );
     IVector_IInspectable_Release( vector );
     return hr;
@@ -768,6 +799,125 @@ static const IBluetoothLEDevice2Vtbl ble_device2_vtbl =
     ble_device2_get_BluetoothAddressType,
 };
 
+DEFINE_IINSPECTABLE( ble_device3, IBluetoothLEDevice3, struct ble_device, IBluetoothLEDevice_iface )
+
+static HRESULT WINAPI ble_device3_get_DeviceAccessInformation( IBluetoothLEDevice3 *iface, IDeviceAccessInformation **value )
+{
+    FIXME( "(%p, %p): stub!\n", iface, value );
+    *value = NULL;
+    return E_NOTIMPL;
+}
+
+static HRESULT ble_device_access_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+{
+    result->vt = VT_UI4;
+    result->ulVal = DeviceAccessStatus_Allowed;
+    return S_OK;
+}
+
+static HRESULT WINAPI ble_device3_RequestAccessAsync( IBluetoothLEDevice3 *iface, IAsyncOperation_DeviceAccessStatus **async )
+{
+    TRACE( "(%p, %p)\n", iface, async );
+    return async_operation_uint32_create( &IID_IAsyncOperation_DeviceAccessStatus, (IUnknown *)iface, NULL,
+                                          ble_device_access_async, (IAsyncOperation_IInspectable **)async );
+}
+
+static HRESULT ble_device_get_services_async( IUnknown *invoker, IUnknown *param, PROPVARIANT *result, BOOL called_async )
+{
+    struct ble_device *impl = impl_from_IBluetoothLEDevice3( (IBluetoothLEDevice3 *)invoker );
+    IGattDeviceServicesResult *services_result;
+    IVector_IInspectable *vector = NULL;
+    GUID uuid, *filter = NULL;
+    HRESULT hr;
+
+    if (param)
+    {
+        IPropertyValue *value;
+        if (FAILED((hr = IUnknown_QueryInterface( param, &IID_IPropertyValue, (void **)&value )))) return hr;
+        hr = IPropertyValue_GetGuid( value, &uuid );
+        IPropertyValue_Release( value );
+        if (FAILED(hr)) return hr;
+        filter = &uuid;
+    }
+    ble_device_get_services_vector( &impl->IBluetoothLEDevice_iface, filter, &vector );
+    hr = gatt_device_services_result_create( vector, &services_result );
+    if (vector) IVector_IInspectable_Release( vector );
+    if (FAILED(hr)) return hr;
+    result->vt = VT_UNKNOWN;
+    result->punkVal = (IUnknown *)services_result;
+    return S_OK;
+}
+
+static HRESULT ble_device_start_services_async( IBluetoothLEDevice3 *iface, const GUID *uuid,
+                                                IAsyncOperation_GattDeviceServicesResult **async )
+{
+    static const WCHAR *class_name = RuntimeClass_Windows_Foundation_PropertyValue;
+    IInspectable *param = NULL;
+    HRESULT hr;
+
+    if (uuid)
+    {
+        IPropertyValueStatics *statics;
+        HSTRING_HEADER hdr;
+        HSTRING str;
+
+        if (FAILED(hr = WindowsCreateStringReference( class_name, wcslen( class_name ), &hdr, &str ))) return hr;
+        if (FAILED(hr = RoGetActivationFactory( str, &IID_IPropertyValueStatics, (void **)&statics ))) return hr;
+        hr = IPropertyValueStatics_CreateGuid( statics, *uuid, &param );
+        IPropertyValueStatics_Release( statics );
+        if (FAILED(hr)) return hr;
+    }
+    hr = async_operation_inspectable_create( &IID_IAsyncOperation_GattDeviceServicesResult, (IUnknown *)iface,
+                                             (IUnknown *)param, ble_device_get_services_async,
+                                             (IAsyncOperation_IInspectable **)async );
+    if (param) IInspectable_Release( param );
+    return hr;
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesAsync( IBluetoothLEDevice3 *iface, IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %p)\n", iface, async );
+    return ble_device_start_services_async( iface, NULL, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesWithCacheModeAsync( IBluetoothLEDevice3 *iface, BluetoothCacheMode mode,
+                                                                     IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %d, %p)\n", iface, mode, async );
+    return ble_device_start_services_async( iface, NULL, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesForUuidAsync( IBluetoothLEDevice3 *iface, GUID uuid,
+                                                               IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( &uuid ), async );
+    return ble_device_start_services_async( iface, &uuid, async );
+}
+
+static HRESULT WINAPI ble_device3_GetGattServicesForUuidWithCacheModeAsync( IBluetoothLEDevice3 *iface, GUID uuid,
+                                                                            BluetoothCacheMode mode,
+                                                                            IAsyncOperation_GattDeviceServicesResult **async )
+{
+    TRACE( "(%p, %s, %d, %p)\n", iface, debugstr_guid( &uuid ), mode, async );
+    return ble_device_start_services_async( iface, &uuid, async );
+}
+
+static const IBluetoothLEDevice3Vtbl ble_device3_vtbl =
+{
+    ble_device3_QueryInterface,
+    ble_device3_AddRef,
+    ble_device3_Release,
+    ble_device3_GetIids,
+    ble_device3_GetRuntimeClassName,
+    ble_device3_GetTrustLevel,
+    ble_device3_get_DeviceAccessInformation,
+    ble_device3_RequestAccessAsync,
+    ble_device3_GetGattServicesAsync,
+    ble_device3_GetGattServicesWithCacheModeAsync,
+    ble_device3_GetGattServicesForUuidAsync,
+    ble_device3_GetGattServicesForUuidWithCacheModeAsync,
+};
+
 static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, UINT64 addr )
 {
     struct ble_device *impl;
@@ -793,6 +943,7 @@ static HRESULT ble_device_create( IBluetoothLEDevice **device, const WCHAR *id, 
     impl->addr = addr;
     impl->IBluetoothLEDevice_iface.lpVtbl = &ble_device_vtbl;
     impl->IBluetoothLEDevice2_iface.lpVtbl = &ble_device2_vtbl;
+    impl->IBluetoothLEDevice3_iface.lpVtbl = &ble_device3_vtbl;
     impl->IClosable_iface.lpVtbl = &ble_device_closable_vtbl;
     InitializeCriticalSectionEx( &impl->cs, 0, RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO );
     *device = &impl->IBluetoothLEDevice_iface;
