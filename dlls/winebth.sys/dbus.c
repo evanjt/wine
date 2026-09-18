@@ -1024,6 +1024,25 @@ static void bluez_device_prop_from_dict_entry( const char *prop_name, DBusMessag
     }
 }
 
+/* BlueZ before 5.69 publishes no Handle on client GATT objects, but the object path ends in the attribute
+ * handle in hex: serviceNNNN, charNNNN or descNNNN. Zero when the path has no such tail. */
+static UINT16 bluez_gatt_handle_from_path( const char *path )
+{
+    const char *name = strrchr( path, '/' );
+    const char *digits;
+    unsigned long handle;
+    char *end;
+
+    name = name ? name + 1 : path;
+    if (!strncmp( name, "service", 7 )) digits = name + 7;
+    else if (!strncmp( name, "char", 4 )) digits = name + 4;
+    else if (!strncmp( name, "desc", 4 )) digits = name + 4;
+    else return 0;
+    handle = strtoul( digits, &end, 16 );
+    if (end == digits || *end || handle > 0xffff) return 0;
+    return handle;
+}
+
 static void bluez_gatt_service_props_from_dict_entry( const char *prop_name, DBusMessageIter *variant,
                                                       struct winebluetooth_watcher_event_gatt_service_added *service )
 {
@@ -2398,6 +2417,8 @@ static BOOL bluez_handle_new_object( DBusMessage *msg, const char *path, DBusMes
 
             while ((prop_name = bluez_next_dict_entry( &props_iter, &variant )))
                 bluez_gatt_service_props_from_dict_entry( prop_name, &variant, &event.gatt_service_added );
+            if (!event.gatt_service_added.attr_handle)
+                event.gatt_service_added.attr_handle = bluez_gatt_handle_from_path( path );
             if (!event.gatt_service_added.device.handle)
             {
                 unix_name_free( (struct unix_name *)event.gatt_service_added.service.handle );
@@ -2428,6 +2449,8 @@ static BOOL bluez_handle_new_object( DBusMessage *msg, const char *path, DBusMes
                     goto done;
                 }
             }
+            if (!event.gatt_characteristic_added.props.AttributeHandle)
+                event.gatt_characteristic_added.props.AttributeHandle = bluez_gatt_handle_from_path( path );
             if (!event.gatt_characteristic_added.service.handle)
             {
                 unix_name_free( (struct unix_name *)event.gatt_characteristic_added.characteristic.handle );
