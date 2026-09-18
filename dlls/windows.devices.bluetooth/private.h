@@ -35,7 +35,9 @@
 
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
+#define WIDL_using_Windows_Storage_Streams
 #include "windows.foundation.h"
+#include "windows.storage.streams.h"
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
 #include "windows.networking.h"
@@ -76,6 +78,10 @@ struct winebth_le_advertisement;
 HRESULT advertisement_create( const struct winebth_le_advertisement *adv, IBluetoothLEAdvertisement **out );
 HRESULT received_args_create( const struct winebth_le_advertisement *adv, IBluetoothLEAdvertisementReceivedEventArgs **out );
 HRESULT stopped_args_create( BluetoothError error, IBluetoothLEAdvertisementWatcherStoppedEventArgs **out );
+
+HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out );
+HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
+HRESULT class_name_string( const WCHAR *name, HSTRING *out );
 
 HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
 
