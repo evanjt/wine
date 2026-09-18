@@ -36,8 +36,10 @@
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
 #define WIDL_using_Windows_Storage_Streams
+#define WIDL_using_Windows_Devices_Enumeration
 #include "windows.foundation.h"
 #include "windows.storage.streams.h"
+#include "windows.devices.enumeration.h"
 #define WIDL_using_Windows_Networking
 #include "windows.networking.connectivity.h"
 #include "windows.networking.h"
@@ -86,7 +88,8 @@ HRESULT buffer_create( const BYTE *data, UINT32 size, IBuffer **out );
 HRESULT buffer_get_data( IBuffer *buffer, BYTE **data, UINT32 *size );
 HRESULT class_name_string( const WCHAR *name, HSTRING *out );
 
-HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, IGattDeviceService **service );
+HRESULT gatt_service_create( const BTH_LE_GATT_SERVICE *svc, HANDLE device, UINT64 addr, IBluetoothLEDevice *ble_device,
+                             IGattDeviceService **service );
 HRESULT gatt_session_create( IBluetoothDeviceId *id, IGattSession **session );
 HRESULT bluetoothdeviceid_create( HSTRING id, IBluetoothDeviceId **out );
 HRESULT gatt_device_services_result_create( IVector_IInspectable *services, IGattDeviceServicesResult **out );

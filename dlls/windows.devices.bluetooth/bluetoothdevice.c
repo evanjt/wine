@@ -289,7 +289,7 @@ static HRESULT WINAPI ble_device_get_GattServices( IBluetoothLEDevice *iface, IV
     {
         IGattDeviceService *service;
 
-        if (FAILED(hr = gatt_service_create( &buf[i], &service ))) goto done;
+        if (FAILED(hr = gatt_service_create( &buf[i], impl->device, impl->addr, iface, &service ))) goto done;
         hr = IVector_IInspectable_Append( vector, (IInspectable *)service );
         IGattDeviceService_Release( service );
         if (FAILED( hr )) goto done;
