@@ -2039,6 +2039,14 @@ static void bluetooth_gatt_operation_complete_irp( struct winebluetooth_watcher_
 
     assert( ext->type == BLUETOOTH_PDO_EXT_GATT_SERVICE );
     EnterCriticalSection( &ext->gatt_service.chars_cs );
+    /* A notify session is recorded when it is requested, so a refusal has to take it back. */
+    if (finished.result && stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_WINEBTH_GATT_SERVICE_SET_CHARACTERISTIC_NOTIFY)
+    {
+        const struct winebth_gatt_service_set_characteristic_notify_params *params = finished.irp->AssociatedIrp.SystemBuffer;
+        struct bluetooth_gatt_characteristic *chrc = find_gatt_characteristic( &ext->gatt_service.characteristics,
+                                                                             &params->uuid, params->handle );
+        if (chrc) chrc->notifying = !params->enable;
+    }
     complete_irp( finished.irp, finished.result );
     LeaveCriticalSection( &ext->gatt_service.chars_cs );
 }
