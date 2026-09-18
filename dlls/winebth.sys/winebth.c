@@ -108,6 +108,7 @@ struct bluetooth_remote_device
     struct list gatt_services; /* Guarded by props_cs */
     LIST_ENTRY gatt_irp_list; /* GATT service requests waiting for a connection. Guarded by props_cs */
     BOOL connecting; /* A BlueZ Connect call is in flight. Guarded by props_cs */
+    unsigned int connect_attempts; /* Guarded by props_cs */
 };
 
 struct bluetooth_gatt_service
@@ -494,6 +495,7 @@ static NTSTATUS bluetooth_remote_device_dispatch( DEVICE_OBJECT *device, struct 
                 winebluetooth_device_dup( ext->device );
                 status = winebluetooth_device_connect( ext->device, irp );
                 ext->connecting = status == STATUS_PENDING;
+                ext->connect_attempts = 1;
             }
             if (status == STATUS_PENDING)
             {
@@ -1992,6 +1994,25 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
             if (!winebluetooth_device_equal( event.device, device->device )) continue;
             EnterCriticalSection( &device->props_cs );
             device->connecting = FALSE;
+            /* BlueZ aborts LE connections to devices with long advertising intervals. A second attempt
+             * usually lands while the device is still awake, so retry before failing the request. */
+            if (event.result && !IsListEmpty( &device->gatt_irp_list ) && device->connect_attempts < 3)
+            {
+                IRP *irp = CONTAINING_RECORD( device->gatt_irp_list.Flink, IRP, Tail.Overlay.ListEntry );
+                NTSTATUS status;
+
+                TRACE( "Retrying connection to %p after %#lx\n", (void *)event.device.handle, event.result );
+                winebluetooth_device_dup( device->device );
+                status = winebluetooth_device_connect( device->device, irp );
+                if (status == STATUS_PENDING)
+                {
+                    device->connecting = TRUE;
+                    device->connect_attempts++;
+                    LeaveCriticalSection( &device->props_cs );
+                    goto done;
+                }
+                winebluetooth_device_free( device->device );
+            }
             if (event.result)
                 bluetooth_device_complete_gatt_irps( device, event.result );
             else if (device->props.connected && device->props.services_resolved)
