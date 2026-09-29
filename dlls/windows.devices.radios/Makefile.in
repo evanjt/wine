@@ -1,5 +1,5 @@
 MODULE  = windows.devices.radios.dll
-IMPORTS = combase
+IMPORTS = bluetoothapis combase
 
 SOURCES = \
 	async.c \
