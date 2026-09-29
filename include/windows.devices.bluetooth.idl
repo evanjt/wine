@@ -61,6 +61,7 @@ namespace Windows.Devices.Bluetooth {
     interface IBluetoothLEDevice4;
     interface IBluetoothLEDevice5;
     interface IBluetoothDeviceIdStatics;
+    interface IBluetoothUuidHelperStatics;
     interface IBluetoothLEDevice;
     interface IBluetoothLEDevice2;
     interface IBluetoothLEDevice3;
@@ -78,6 +79,7 @@ namespace Windows.Devices.Bluetooth {
     runtimeclass BluetoothLEAppearance;
     runtimeclass BluetoothLEDevice;
     runtimeclass BluetoothSignalStrengthFilter;
+    runtimeclass BluetoothUuidHelper;
 
     namespace Rfcomm {
         runtimeclass RfcommDeviceService;
@@ -435,6 +437,27 @@ namespace Windows.Devices.Bluetooth {
     runtimeclass BluetoothDeviceId
     {
         [default] interface Windows.Devices.Bluetooth.IBluetoothDeviceId;
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.Devices.Bluetooth.BluetoothUuidHelper),
+        uuid(17df0cd8-cf74-4b21-afe6-f57a11bcdea0)
+    ]
+    interface IBluetoothUuidHelperStatics : IInspectable
+    {
+        HRESULT FromShortId([in] UINT32 shortId, [out, retval] GUID *result);
+        HRESULT TryGetShortId([in] GUID uuid, [out, retval] Windows.Foundation.IReference<UINT32> **result);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        static(Windows.Devices.Bluetooth.IBluetoothUuidHelperStatics, Windows.Foundation.UniversalApiContract, 1.0),
+        threading(both)
+    ]
+    runtimeclass BluetoothUuidHelper
+    {
     }
 
     [
