@@ -1390,7 +1390,7 @@ static inline struct gatt_service *impl_from_IGattDeviceService( IGattDeviceServ
 }
 
 /* Find the driver's device node for this service. Caller must hold impl->cs. */
-static HANDLE gatt_service_open( struct gatt_service *impl )
+static HANDLE gatt_service_find( struct gatt_service *impl )
 {
     char buffer[sizeof( SP_DEVICE_INTERFACE_DETAIL_DATA_W ) + MAX_PATH * sizeof( WCHAR )];
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
@@ -1432,8 +1432,25 @@ static HANDLE gatt_service_open( struct gatt_service *impl )
         break;
     }
     SetupDiDestroyDeviceInfoList( devinfo );
-    if (impl->service_handle == INVALID_HANDLE_VALUE) WARN( "No device node for service %s\n", debugstr_guid( &uuid ) );
     return impl->service_handle;
+}
+
+/* winebth creates the service device nodes asynchronously once BlueZ has resolved the services, so an app
+ * that asks for characteristics right after connecting can get ahead of them. Wait a little for them to
+ * appear. Caller must hold impl->cs. */
+static HANDLE gatt_service_open( struct gatt_service *impl )
+{
+    GUID uuid;
+    int i;
+
+    for (i = 0; i < 50; i++)
+    {
+        if (gatt_service_find( impl ) != INVALID_HANDLE_VALUE) return impl->service_handle;
+        Sleep( 100 );
+    }
+    le_uuid_to_guid( &impl->service.ServiceUuid, &uuid );
+    WARN( "No device node for service %s\n", debugstr_guid( &uuid ) );
+    return INVALID_HANDLE_VALUE;
 }
 
 static HANDLE gatt_service_get_handle( struct gatt_service *impl )
