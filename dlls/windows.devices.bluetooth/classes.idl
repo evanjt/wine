@@ -39,6 +39,7 @@ namespace Windows.Devices.Bluetooth {
     runtimeclass BluetoothDevice;
     runtimeclass BluetoothLEDevice;
     runtimeclass BluetoothDeviceId;
+    runtimeclass BluetoothUuidHelper;
 }
 
 namespace Windows.Devices.Bluetooth.GenericAttributeProfile {

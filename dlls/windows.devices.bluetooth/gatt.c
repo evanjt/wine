@@ -743,7 +743,242 @@ static struct device_id_statics device_id_statics =
 
 IActivationFactory *bluetoothdeviceid_statics_factory = &device_id_statics.IActivationFactory_iface;
 
+/* --- BluetoothUuidHelper --- */
+
+/* 00000000-0000-1000-8000-00805F9B34FB */
+static const GUID bluetooth_base_uuid = {0x00000000, 0x0000, 0x1000, {0x80, 0x00, 0x00, 0x80, 0x5f, 0x9b, 0x34, 0xfb}};
+
+struct uuid_helper_statics
+{
+    IActivationFactory IActivationFactory_iface;
+    IBluetoothUuidHelperStatics IBluetoothUuidHelperStatics_iface;
+    LONG ref;
+};
+
+static inline struct uuid_helper_statics *uuid_helper_statics_from_IActivationFactory( IActivationFactory *iface )
+{
+    return CONTAINING_RECORD( iface, struct uuid_helper_statics, IActivationFactory_iface );
+}
+
+static HRESULT WINAPI uuid_helper_factory_QueryInterface( IActivationFactory *iface, REFIID iid, void **out )
+{
+    struct uuid_helper_statics *impl = uuid_helper_statics_from_IActivationFactory( iface );
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
+    {
+        IActivationFactory_AddRef(( *out = &impl->IActivationFactory_iface ));
+        return S_OK;
+    }
+    if (IsEqualGUID( iid, &IID_IBluetoothUuidHelperStatics ))
+    {
+        IActivationFactory_AddRef( iface );
+        *out = &impl->IBluetoothUuidHelperStatics_iface;
+        return S_OK;
+    }
+    *out = NULL;
+    FIXME( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI uuid_helper_factory_AddRef( IActivationFactory *iface )
+{
+    struct uuid_helper_statics *impl = uuid_helper_statics_from_IActivationFactory( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI uuid_helper_factory_Release( IActivationFactory *iface )
+{
+    struct uuid_helper_statics *impl = uuid_helper_statics_from_IActivationFactory( iface );
+    return InterlockedDecrement( &impl->ref );
+}
+
+static HRESULT WINAPI uuid_helper_factory_GetIids( IActivationFactory *iface, ULONG *iid_count, IID **iids )
+{
+    FIXME( "(%p, %p, %p): stub!\n", iface, iid_count, iids );
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI uuid_helper_factory_GetRuntimeClassName( IActivationFactory *iface, HSTRING *class_name )
+{
+    return class_name_string( L"Windows.Devices.Bluetooth.BluetoothUuidHelper", class_name );
+}
+
+static HRESULT WINAPI uuid_helper_factory_GetTrustLevel( IActivationFactory *iface, TrustLevel *level )
+{
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI uuid_helper_factory_ActivateInstance( IActivationFactory *iface, IInspectable **instance )
+{
+    FIXME( "(%p, %p): stub!\n", iface, instance );
+    return E_NOTIMPL;
+}
+
+static const struct IActivationFactoryVtbl uuid_helper_factory_vtbl =
+{
+    uuid_helper_factory_QueryInterface,
+    uuid_helper_factory_AddRef,
+    uuid_helper_factory_Release,
+    uuid_helper_factory_GetIids,
+    uuid_helper_factory_GetRuntimeClassName,
+    uuid_helper_factory_GetTrustLevel,
+    uuid_helper_factory_ActivateInstance,
+};
+
+DEFINE_IINSPECTABLE( uuid_helper_statics, IBluetoothUuidHelperStatics, struct uuid_helper_statics, IActivationFactory_iface )
+
+static HRESULT WINAPI uuid_helper_statics_FromShortId( IBluetoothUuidHelperStatics *iface, UINT32 short_id, GUID *result )
+{
+    TRACE( "(%p, %#x, %p)\n", iface, short_id, result );
+
+    if (!result) return E_POINTER;
+    *result = bluetooth_base_uuid;
+    result->Data1 = short_id;
+    return S_OK;
+}
+
+static HRESULT WINAPI uuid_helper_statics_TryGetShortId( IBluetoothUuidHelperStatics *iface, GUID uuid, IReference_UINT32 **result )
+{
+    IInspectable *boxed;
+    HRESULT hr;
+
+    TRACE( "(%p, %s, %p)\n", iface, debugstr_guid( &uuid ), result );
+
+    if (!result) return E_POINTER;
+    *result = NULL;
+
+    /* Only UUIDs derived from the Bluetooth base UUID have a short form. */
+    if (uuid.Data2 != bluetooth_base_uuid.Data2 || uuid.Data3 != bluetooth_base_uuid.Data3 ||
+        memcmp( uuid.Data4, bluetooth_base_uuid.Data4, sizeof( uuid.Data4 ) ))
+        return S_OK;
+
+    if (FAILED(hr = box_uint32( uuid.Data1, &boxed ))) return hr;
+    hr = IInspectable_QueryInterface( boxed, &IID_IReference_UINT32, (void **)result );
+    IInspectable_Release( boxed );
+    return hr;
+}
+
+static const IBluetoothUuidHelperStaticsVtbl uuid_helper_statics_vtbl =
+{
+    uuid_helper_statics_QueryInterface,
+    uuid_helper_statics_AddRef,
+    uuid_helper_statics_Release,
+    uuid_helper_statics_GetIids,
+    uuid_helper_statics_GetRuntimeClassName,
+    uuid_helper_statics_GetTrustLevel,
+    uuid_helper_statics_FromShortId,
+    uuid_helper_statics_TryGetShortId,
+};
+
+static struct uuid_helper_statics uuid_helper_statics =
+{
+    {&uuid_helper_factory_vtbl},
+    {&uuid_helper_statics_vtbl},
+    1
+};
+
+IActivationFactory *bluetoothuuidhelper_statics_factory = &uuid_helper_statics.IActivationFactory_iface;
+
 /* --- GattSession --- */
+
+/* winebth only connects an LE device when its GATT services are requested. Windows connects as soon as
+ * MaintainConnection is set, and apps (like Zwift) wait for ConnectionStatusChanged before asking for
+ * services. A gatt_link keeps a device handle open with a services request, which makes winebth connect
+ * and keeps the link up, and re-issues the request periodically so a dropped link is re-established. */
+struct gatt_link
+{
+    LONG ref;
+    HANDLE stop;
+    HANDLE device;
+    WCHAR path[1];
+};
+
+static void gatt_link_release( struct gatt_link *link )
+{
+    if (InterlockedDecrement( &link->ref )) return;
+    if (link->device != INVALID_HANDLE_VALUE) CloseHandle( link->device );
+    if (link->stop) CloseHandle( link->stop );
+    free( link );
+}
+
+static DWORD CALLBACK gatt_link_thread( void *arg )
+{
+    struct gatt_link *link = arg;
+    struct
+    {
+        struct winebth_le_device_get_gatt_services_params params;
+        BTH_LE_GATT_SERVICE services[1];
+    } buffer;
+    DWORD bytes;
+
+    SetThreadDescription( GetCurrentThread(), L"wine_gatt_link" );
+
+    do
+    {
+        memset( &buffer, 0, sizeof( buffer ) );
+        if (!DeviceIoControl( link->device, IOCTL_WINEBTH_LE_DEVICE_GET_GATT_SERVICES, NULL, 0,
+                              &buffer, sizeof( buffer ), &bytes, NULL ) && GetLastError() != ERROR_MORE_DATA)
+            WARN( "connecting %s failed: %lu\n", debugstr_w( link->path ), GetLastError() );
+        else
+            TRACE( "%s connected, %lu services\n", debugstr_w( link->path ), buffer.params.count );
+    } while (WaitForSingleObject( link->stop, 5000 ) == WAIT_TIMEOUT);
+
+    gatt_link_release( link );
+    return 0;
+}
+
+static struct gatt_link *gatt_link_start( IBluetoothDeviceId *id )
+{
+    struct gatt_link *link;
+    const WCHAR *path;
+    HANDLE thread;
+    HSTRING str;
+    UINT32 len;
+
+    if (FAILED(IBluetoothDeviceId_get_Id( id, &str ))) return NULL;
+    path = WindowsGetStringRawBuffer( str, &len );
+    if (!(link = calloc( 1, offsetof( struct gatt_link, path[len + 1] ) )))
+    {
+        WindowsDeleteString( str );
+        return NULL;
+    }
+    memcpy( link->path, path, len * sizeof(WCHAR) );
+    WindowsDeleteString( str );
+
+    link->ref = 1;
+    link->device = INVALID_HANDLE_VALUE;
+    if (!(link->stop = CreateEventW( NULL, TRUE, FALSE, NULL )) ||
+        (link->device = CreateFileW( link->path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     NULL, OPEN_EXISTING, 0, NULL )) == INVALID_HANDLE_VALUE)
+    {
+        WARN( "failed to open %s: %lu\n", debugstr_w( link->path ), GetLastError() );
+        gatt_link_release( link );
+        return NULL;
+    }
+
+    link->ref++; /* owned by the thread */
+    if (!(thread = CreateThread( NULL, 0, gatt_link_thread, link, 0, NULL )))
+    {
+        link->ref--;
+        gatt_link_release( link );
+        return NULL;
+    }
+    CloseHandle( thread );
+    TRACE( "maintaining connection to %s\n", debugstr_w( link->path ) );
+    return link;
+}
+
+static void gatt_link_stop( struct gatt_link *link )
+{
+    if (!link) return;
+    SetEvent( link->stop );
+    CancelIoEx( link->device, NULL );
+    gatt_link_release( link );
+}
 
 struct gatt_session
 {
