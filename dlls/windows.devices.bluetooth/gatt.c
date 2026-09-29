@@ -914,6 +914,7 @@ static DWORD CALLBACK gatt_link_thread( void *arg )
         BTH_LE_GATT_SERVICE services[1];
     } buffer;
     DWORD bytes;
+    BOOL connected = FALSE;
 
     SetThreadDescription( GetCurrentThread(), L"wine_gatt_link" );
 
@@ -922,10 +923,19 @@ static DWORD CALLBACK gatt_link_thread( void *arg )
         memset( &buffer, 0, sizeof( buffer ) );
         if (!DeviceIoControl( link->device, IOCTL_WINEBTH_LE_DEVICE_GET_GATT_SERVICES, NULL, 0,
                               &buffer, sizeof( buffer ), &bytes, NULL ) && GetLastError() != ERROR_MORE_DATA)
+        {
             WARN( "connecting %s failed: %lu\n", debugstr_w( link->path ), GetLastError() );
+            connected = FALSE;
+        }
         else
+        {
             TRACE( "%s connected, %lu services\n", debugstr_w( link->path ), buffer.params.count );
-    } while (WaitForSingleObject( link->stop, 5000 ) == WAIT_TIMEOUT);
+            connected = TRUE;
+        }
+        /* Retry quickly while not yet connected (the first attempt commonly races ahead of
+         * winebth/BlueZ), but fall back to the original slow keep-alive cadence once connected
+         * so we don't needlessly hammer an already-live link. */
+    } while (WaitForSingleObject( link->stop, connected ? 5000 : 300 ) == WAIT_TIMEOUT);
 
     gatt_link_release( link );
     return 0;
