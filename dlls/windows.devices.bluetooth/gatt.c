@@ -987,6 +987,7 @@ struct gatt_session
     LONG ref;
     IBluetoothDeviceId *id;
     boolean maintain_connection;
+    struct gatt_link *link;
     struct event_handlers pdu_changed;
     struct event_handlers status_changed;
 };
@@ -1031,6 +1032,7 @@ static ULONG WINAPI gatt_session_Release( IGattSession *iface )
     ULONG ref = InterlockedDecrement( &impl->ref );
     if (!ref)
     {
+        gatt_link_stop( InterlockedExchangePointer( (void **)&impl->link, NULL ) );
         IBluetoothDeviceId_Release( impl->id );
         event_handlers_free( &impl->pdu_changed );
         event_handlers_free( &impl->status_changed );
@@ -1074,8 +1076,17 @@ static HRESULT WINAPI gatt_session_get_CanMaintainConnection( IGattSession *ifac
 static HRESULT WINAPI gatt_session_put_MaintainConnection( IGattSession *iface, boolean value )
 {
     struct gatt_session *impl = impl_from_IGattSession( iface );
+    struct gatt_link *link;
+
     TRACE( "(%p, %d)\n", iface, value );
     impl->maintain_connection = value;
+    if (value && !impl->link)
+    {
+        if ((link = gatt_link_start( impl->id )) && InterlockedCompareExchangePointer( (void **)&impl->link, link, NULL ))
+            gatt_link_stop( link );
+    }
+    else if (!value)
+        gatt_link_stop( InterlockedExchangePointer( (void **)&impl->link, NULL ) );
     return S_OK;
 }
 
@@ -1157,7 +1168,11 @@ DEFINE_IINSPECTABLE_( gatt_session_closable, IClosable, struct gatt_session, gat
 
 static HRESULT WINAPI gatt_session_closable_Close( IClosable *iface )
 {
+    struct gatt_session *impl = CONTAINING_RECORD( iface, struct gatt_session, IClosable_iface );
+
     TRACE( "(%p)\n", iface );
+    gatt_link_stop( InterlockedExchangePointer( (void **)&impl->link, NULL ) );
+    impl->maintain_connection = FALSE;
     return S_OK;
 }
 
