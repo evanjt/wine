@@ -2100,6 +2100,33 @@ static void bluez_device_connect_callback( DBusPendingCall *pending, void *param
     p_dbus_message_unref( reply );
 }
 
+/* BlueZ forgets an unpaired device, and the GATT database it cached for it, shortly after it
+ * disconnects, so every connect rediscovers the services at the device's own connection interval.
+ * A trusted device is kept, which makes later connects a hash check instead. The reply is not
+ * needed, a failure only costs that speed. */
+static void bluez_device_trust( void *connection, struct unix_name *device )
+{
+    static const char *device_iface = BLUEZ_INTERFACE_DEVICE, *prop_name = "Trusted";
+    const dbus_bool_t trusted = TRUE;
+    DBusMessageIter iter, sub_iter;
+    DBusMessage *request;
+
+    request = p_dbus_message_new_method_call( BLUEZ_DEST, device->str, DBUS_INTERFACE_PROPERTIES, "Set" );
+    if (!request) return;
+    p_dbus_message_iter_init_append( request, &iter );
+    if (p_dbus_message_iter_append_basic( &iter, DBUS_TYPE_STRING, &device_iface ) &&
+        p_dbus_message_iter_append_basic( &iter, DBUS_TYPE_STRING, &prop_name ) &&
+        p_dbus_message_iter_open_container( &iter, DBUS_TYPE_VARIANT, DBUS_TYPE_BOOLEAN_AS_STRING, &sub_iter ))
+    {
+        if (p_dbus_message_iter_append_basic( &sub_iter, DBUS_TYPE_BOOLEAN, &trusted ) &&
+            p_dbus_message_iter_close_container( &iter, &sub_iter ))
+            p_dbus_connection_send( connection, request, NULL );
+        else
+            p_dbus_message_iter_abandon_container( &iter, &sub_iter );
+    }
+    p_dbus_message_unref( request );
+}
+
 NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_name *device, IRP *irp )
 {
     DBusMessage *request;
@@ -2109,6 +2136,7 @@ NTSTATUS bluez_device_connect( void *connection, void *watcher_ctx, struct unix_
 
     TRACE( "(%p, %p, %s, %p)\n", connection, watcher_ctx, debugstr_a( device->str ), irp );
 
+    bluez_device_trust( connection, device );
     request = p_dbus_message_new_method_call( BLUEZ_DEST, device->str, BLUEZ_INTERFACE_DEVICE, "Connect" );
     if (!request)
         return STATUS_NO_MEMORY;
