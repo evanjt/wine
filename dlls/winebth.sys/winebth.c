@@ -111,6 +111,7 @@ struct bluetooth_remote_device
     struct list gatt_services; /* Guarded by props_cs */
     LIST_ENTRY gatt_irp_list; /* GATT service requests waiting for a connection. Guarded by props_cs */
     BOOL connecting; /* A BlueZ Connect call is in flight. Guarded by props_cs */
+    BOOL reported_connected; /* The connected state clients were last told. Guarded by props_cs */
     unsigned int connect_attempts; /* Guarded by props_cs */
     LONG open_handles; /* Handles on this device and its GATT services. Guarded by props_cs */
     ULONGLONG last_adv_report; /* Tick count of the last advertisement event. Guarded by props_cs */
@@ -1506,6 +1507,9 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                 EnterCriticalSection( &device->props_cs );
                 had_le_iface = !!device->bthle_symlink_name.Buffer;
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &old_info );
+                /* Compared against what clients were told, not against the state a retry left behind. */
+                old_info.flags &= ~BDIF_CONNECTED;
+                if (device->reported_connected) old_info.flags |= BDIF_CONNECTED;
 
                 device->props_mask |= event.changed_props_mask;
                 device->props_mask &= ~event.invalid_props_mask;
@@ -1553,6 +1557,17 @@ static void bluetooth_radio_update_device_props( struct winebluetooth_watcher_ev
                 if (bluetooth_device_is_le( device->props_mask, &device->props ))
                     bluetooth_device_enable_le_iface( device );
                 winebluetooth_device_properties_to_info( device->props_mask, &device->props, &device_new_info );
+                /* A connect that BlueZ aborts and the driver retries flips Connected on the way. An app
+                 * that sees a disconnect while it waits for the connect fails it, so while the driver owns
+                 * the connect, clients keep seeing the state they were last told. The result is reported
+                 * once, when the connect ends. */
+                if (device->connecting)
+                {
+                    device_new_info.flags &= ~BDIF_CONNECTED;
+                    if (device->reported_connected) device_new_info.flags |= BDIF_CONNECTED;
+                }
+                else
+                    device->reported_connected = device->props.connected;
                 /* A new LE interface needs its initial properties. RSSI updates need no registry writes. */
                 if (!had_le_iface && device->bthle_symlink_name.Buffer) property_mask = device->props_mask;
                 bluetooth_device_set_properties( device, adapter_addr.rgBytes, &device->props, property_mask );
@@ -2075,7 +2090,10 @@ static BOOL bluetooth_device_unowned( struct bluetooth_remote_device *device )
 static void bluetooth_device_connect_finished( struct winebluetooth_watcher_event_connect_finished event )
 {
     struct bluetooth_radio *radio;
-    BOOL drop = FALSE;
+    DEVICE_OBJECT *radio_obj = NULL;
+    BTH_DEVICE_INFO info = {0};
+    ULONG old_flags = 0;
+    BOOL drop = FALSE, report = FALSE;
 
     TRACE( "device %p irp %p result %#lx\n", (void *)event.device.handle, event.irp, event.result );
 
@@ -2112,6 +2130,16 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
                 bluetooth_device_complete_gatt_irps( device, event.result );
             else if (bluetooth_device_gatt_services_ready( device ))
                 bluetooth_device_complete_gatt_irps( device, STATUS_SUCCESS );
+            /* Clients were held at the state before the connect, so tell them its outcome now. */
+            if (device->reported_connected != device->props.connected)
+            {
+                winebluetooth_device_properties_to_info( device->props_mask, &device->props, &info );
+                old_flags = info.flags & ~BDIF_CONNECTED;
+                if (device->reported_connected) old_flags |= BDIF_CONNECTED;
+                device->reported_connected = device->props.connected;
+                radio_obj = radio->device_obj;
+                report = TRUE;
+            }
             /* The application may have given up and closed the device while Connect was pending. */
             drop = bluetooth_device_unowned( device );
             LeaveCriticalSection( &device->props_cs );
@@ -2121,6 +2149,7 @@ static void bluetooth_device_connect_finished( struct winebluetooth_watcher_even
     /* The device went away while connecting. Its request queue is drained by remote_device_destroy.
      * event.irp may also have completed on ServicesResolved already, so never complete it here. */
 done:
+    if (report) bluetooth_radio_report_radio_in_range_event( radio_obj, old_flags, &info );
     LeaveCriticalSection( &device_list_cs );
     if (drop)
     {
