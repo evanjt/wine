@@ -1384,7 +1384,9 @@ static void adapter_vk_destroy_texture(struct wined3d_texture *texture)
     /* Remove export metadata before its last VkDeviceMemory can be retired.
      * Import holds the wined3d mutex through allocation, so it cannot race this
      * final detach. Drain pending initialization before inspecting shared. */
-    if (texture->resource.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX)
+    if ((texture->resource.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX)
+            || ((texture->resource.usage & WINED3DUSAGE_SHARED)
+            && (wined3d_shared_vk_enabled() || texture_vk->shared)))
     {
         if (GetCurrentThreadId() != device->cs->thread_id)
             wined3d_cs_finish(device->cs, WINED3D_CS_QUEUE_DEFAULT);

@@ -567,7 +567,14 @@ static inline void *wined3d_device_context_require_space(struct wined3d_device_c
 static inline void wined3d_device_context_submit(struct wined3d_device_context *context,
         enum wined3d_cs_queue_id queue_id)
 {
+    bool shared = context->legacy_shared_pending;
+
+    context->legacy_shared_pending = false;
     context->ops->submit(context, queue_id);
+    /* Preserve application call order between independent CS threads. The
+     * execution wrapper also waits for GPU completion, not merely submission. */
+    if (shared && context == &context->device->cs->c)
+        context->ops->finish(context, queue_id);
 }
 
 static inline void wined3d_device_context_finish(struct wined3d_device_context *context,
@@ -579,6 +586,7 @@ static inline void wined3d_device_context_finish(struct wined3d_device_context *
 static inline void wined3d_device_context_reference_resource(struct wined3d_device_context *context,
         struct wined3d_resource *resource)
 {
+    if (wined3d_shared_legacy_resource(resource)) context->legacy_shared_pending = true;
     context->ops->reference_resource(context, resource);
 }
 
@@ -1300,6 +1308,7 @@ void CDECL wined3d_device_context_draw_indirect(struct wined3d_device_context *c
 static void wined3d_cs_exec_flush(struct wined3d_cs *cs, const void *data)
 {
     struct wined3d_context *context;
+
 
     TRACE_(d3d_perf)("Flushing adapter.\n");
     context = context_acquire(cs->c.device, NULL, 0);
@@ -2476,7 +2485,10 @@ static void wined3d_cs_reference_command_list(struct wined3d_device_context *con
     }
 
     for (i = 0; i < list->resource_count; ++i)
+    {
+        if (wined3d_shared_legacy_resource(list->resources[i])) context->legacy_shared_pending = true;
         wined3d_resource_reference(list->resources[i]);
+    }
 
     for (i = 0; i < list->command_list_count; ++i)
         wined3d_cs_reference_command_list(context, list->command_lists[i]);
@@ -2897,6 +2909,7 @@ void wined3d_device_context_emit_update_sub_resource(struct wined3d_device_conte
     op->row_pitch = row_pitch;
     op->slice_pitch = slice_pitch;
 
+    if (wined3d_shared_legacy_resource(resource)) context->legacy_shared_pending = true;
     wined3d_device_context_submit(context, WINED3D_CS_QUEUE_MAP);
     /* The data pointer may go away, so we need to wait until it is read.
      * Copying the data may be faster if it's small. */
@@ -3127,6 +3140,128 @@ static void (* const wined3d_cs_op_handlers[])(struct wined3d_cs *cs, const void
     /* WINED3D_CS_OP_EXECUTE_COMMAND_LIST        */ wined3d_cs_exec_execute_command_list,
 };
 
+static bool shared_access_add(struct wined3d_shared_access *a, struct wined3d_resource *r)
+{
+    unsigned int i;
+    if (!wined3d_shared_legacy_resource(r)) return true;
+    for (i = 0; i < a->count; ++i) if (a->resources[i] == r) return true;
+    if (a->count == ARRAY_SIZE(a->resources)) return false;
+    a->resources[a->count++] = r;
+    return true;
+}
+
+static bool shared_shader_access(struct wined3d_shared_access *a, const struct wined3d_state *state,
+        unsigned int mask)
+{
+    const struct wined3d_shader *shader;
+    struct wined3d_shader_resource_view *view;
+    unsigned int i, j, idx;
+    for (i = 0; i < WINED3D_SHADER_TYPE_COUNT; ++i)
+    {
+        if (!(mask & (1u << i))) continue;
+        shader = state->shader[i];
+        for (j = 0; j < (shader ? shader->reg_maps.sampler_map.count
+                : i == WINED3D_SHADER_TYPE_PIXEL ? WINED3D_MAX_FFP_TEXTURES : 0); ++j)
+        {
+            idx = shader ? shader->reg_maps.sampler_map.entries[j].resource_idx : j;
+            if ((view = state->shader_resource_view[i][idx]) && !shared_access_add(a, view->resource)) return false;
+        }
+    }
+    return true;
+}
+
+static bool shared_full_box(const struct wined3d_box *b, const struct wined3d_resource *r)
+{
+    return !b->left && !b->top && !b->front && b->right == r->width && b->bottom == r->height && b->back == 1;
+}
+
+/* All three CS execution paths (threaded, inline, command list) use this gate. */
+static void wined3d_cs_execute(struct wined3d_cs *cs, enum wined3d_cs_op opcode, const void *data)
+{
+    struct wined3d_shared_access a = {0};
+    bool valid = true;
+    unsigned int i;
+
+    if (!wined3d_shared_legacy_enabled())
+    {
+        wined3d_cs_op_handlers[opcode](cs, data);
+        return;
+    }
+
+    switch (opcode)
+    {
+        case WINED3D_CS_OP_DRAW:
+            a.operation = "draw";
+            valid = shared_shader_access(&a, &cs->state, ~(1u << WINED3D_SHADER_TYPE_COMPUTE));
+            break;
+        case WINED3D_CS_OP_DISPATCH:
+            a.operation = "dispatch";
+            valid = shared_shader_access(&a, &cs->state, 1u << WINED3D_SHADER_TYPE_COMPUTE);
+            break;
+        case WINED3D_CS_OP_BLT_SUB_RESOURCE:
+        {
+            const struct wined3d_cs_blt_sub_resource *op = data;
+            a.operation = "copy";
+            valid = shared_access_add(&a, op->src_resource) && shared_access_add(&a, op->dst_resource);
+            if (a.count)
+                valid = valid && op->src_resource && op->src_resource->device == cs->c.device
+                        && op->dst_resource->device == cs->c.device;
+            if (wined3d_shared_legacy_resource(op->dst_resource))
+            {
+
+                valid = valid && !op->dst_sub_resource_idx && shared_full_box(&op->dst_box, op->dst_resource)
+                        && op->src_resource && op->src_resource->format->id == WINED3DFMT_NV12_PLANAR
+                        && op->src_box.right - op->src_box.left == op->dst_resource->width
+                        && op->src_box.bottom - op->src_box.top == op->dst_resource->height;
+            }
+            break;
+        }
+        case WINED3D_CS_OP_UPDATE_SUB_RESOURCE:
+        {
+            const struct wined3d_cs_update_sub_resource *op = data;
+            a.operation = "upload";
+            valid = shared_access_add(&a, op->resource);
+            if (a.count)
+            {
+
+                valid = valid && !op->sub_resource_idx && shared_full_box(&op->box, op->resource);
+            }
+            break;
+        }
+        case WINED3D_CS_OP_PRELOAD_RESOURCE:
+        {
+            const struct wined3d_cs_preload_resource *op = data;
+            a.operation = "preload";
+            valid = shared_access_add(&a, op->resource);
+            break;
+        }
+        case WINED3D_CS_OP_GENERATE_MIPMAPS:
+        {
+            const struct wined3d_cs_generate_mipmaps *op = data;
+            /* The admitted descriptor has exactly one mip and no GENERATE_MIPS. */
+            if (wined3d_shared_legacy_resource(op->view->resource)) valid = false;
+            break;
+        }
+        default:
+            break;
+    }
+    for (i = 0; i < a.count; ++i)
+        if (a.resources[i]->device != cs->c.device) valid = false;
+    if (!valid || !wined3d_shared_access_begin(&a))
+    {
+        ERR("Unsupported legacy NV12 access in %s; command rejected.\n", debug_cs_op(opcode));
+        if (opcode == WINED3D_CS_OP_UPDATE_SUB_RESOURCE)
+        {
+            const struct wined3d_cs_update_sub_resource *op = data;
+            if ((op->bo.flags & UPLOAD_BO_FREE_ON_UNMAP) && !op->bo.addr.buffer_object)
+                free((void *)op->bo.addr.addr);
+        }
+        return;
+    }
+    wined3d_cs_op_handlers[opcode](cs, data);
+    wined3d_shared_access_end(&a);
+}
+
 void wined3d_device_context_emit_execute_command_list(struct wined3d_device_context *context,
         struct wined3d_command_list *list, bool restore_state)
 {
@@ -3189,7 +3324,7 @@ static void wined3d_cs_st_submit(struct wined3d_device_context *context, enum wi
     if (opcode >= WINED3D_CS_OP_STOP)
         ERR("Invalid opcode %#x.\n", opcode);
     else
-        wined3d_cs_op_handlers[opcode](cs, &data[start]);
+        wined3d_cs_execute(cs, opcode, &data[start]);
 
     if (cs->data == data)
         cs->start = cs->end = start;
@@ -3579,7 +3714,7 @@ static inline bool wined3d_cs_execute_next(struct wined3d_cs *cs, struct wined3d
         }
 
         wined3d_cs_command_lock(cs);
-        wined3d_cs_op_handlers[opcode](cs, packet->data);
+        wined3d_cs_execute(cs, opcode, packet->data);
         wined3d_cs_command_unlock(cs);
         TRACE("%s executed.\n", debug_cs_packet(packet));
     }
@@ -3612,7 +3747,7 @@ static void wined3d_cs_exec_execute_command_list(struct wined3d_cs *cs, const vo
         if (opcode >= WINED3D_CS_OP_STOP)
             ERR("Invalid opcode %#x.\n", opcode);
         else
-            wined3d_cs_op_handlers[opcode](cs, packet->data);
+            wined3d_cs_execute(cs, opcode, packet->data);
         TRACE("%s executed.\n", debug_cs_op(opcode));
     }
 }

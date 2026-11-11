@@ -1,6 +1,6 @@
 /* Experimental same-process NV12 external-memory sharing.
- * LGPL-2.1-or-later. Access must be bracketed by the keyed mutex.
- * Deliberately excludes legacy unsynchronized sharing and NT handles. */
+ * LGPL-2.1-or-later. Keyed access is explicit; legacy access is serialized
+ * per WineD3D command. Deliberately excludes cross-process and NT handles. */
 #include "wined3d_private.h"
 #include "wined3d_vk.h"
 
@@ -23,26 +23,52 @@ struct wined3d_shared_vk
 static struct list shared_images = LIST_INIT(shared_images);
 static SRWLOCK shared_lock = SRWLOCK_INIT;
 
-bool wined3d_shared_vk_enabled(void)
+static bool sharing_option(const char *name)
 {
     char value[2];
+    return GetEnvironmentVariableA(name, value, sizeof(value)) == 1 && value[0] == '1';
+}
+
+bool wined3d_shared_legacy_enabled(void)
+{
+    /* Like renderer selection, this experimental option is fixed per process. */
+    static LONG enabled = -1;
+    LONG value = InterlockedCompareExchange(&enabled, -1, -1);
+    if (value == -1)
+    {
+        value = sharing_option("WINE_ROUVY_NV12_LEGACY");
+        InterlockedCompareExchange(&enabled, value, -1);
+    }
+    return value && wined3d_get_renderer() == WINED3D_RENDERER_VULKAN;
+}
+
+bool wined3d_shared_vk_enabled(void)
+{
     return wined3d_get_renderer() == WINED3D_RENDERER_VULKAN
-            && GetEnvironmentVariableA("WINE_ROUVY_NV12_SHARED", value, sizeof(value)) == 1 && value[0] == '1';
+            && (sharing_option("WINE_ROUVY_NV12_SHARED") || wined3d_shared_legacy_enabled());
+}
+
+bool wined3d_shared_legacy_resource(const struct wined3d_resource *r)
+{
+    return r && r->type == WINED3D_RTYPE_TEXTURE_2D && r->format->id == WINED3DFMT_NV12_PLANAR
+            && (r->usage & (WINED3DUSAGE_SHARED | WINED3DUSAGE_SHARED_KEYED_MUTEX | WINED3DUSAGE_SHARED_NT_HANDLE))
+                    == WINED3DUSAGE_SHARED && wined3d_shared_legacy_enabled();
 }
 
 bool wined3d_shared_vk_resource_pinned(struct wined3d_resource *r)
 {
     return wined3d_get_renderer() == WINED3D_RENDERER_VULKAN
-            && r->type == WINED3D_RTYPE_TEXTURE_2D && (r->usage & WINED3DUSAGE_SHARED_KEYED_MUTEX)
+            && r->type == WINED3D_RTYPE_TEXTURE_2D && (r->usage & WINED3DUSAGE_SHARED)
             && wined3d_texture_vk(texture_from_resource(r))->shared;
 }
 
-static bool shared_resource_supported(struct wined3d_resource *r)
+bool wined3d_shared_vk_resource_supported(struct wined3d_resource *r)
 {
-    return wined3d_shared_vk_enabled() && r->type == WINED3D_RTYPE_TEXTURE_2D
-            && r->format->id == WINED3DFMT_NV12_PLANAR
-            && (r->usage & (WINED3DUSAGE_SHARED_KEYED_MUTEX | WINED3DUSAGE_SHARED_NT_HANDLE))
-                    == WINED3DUSAGE_SHARED_KEYED_MUTEX
+    return r->type == WINED3D_RTYPE_TEXTURE_2D
+            && r->format->id == WINED3DFMT_NV12_PLANAR && wined3d_shared_vk_enabled()
+            && !(r->usage & WINED3DUSAGE_SHARED_NT_HANDLE)
+            && (((r->usage & WINED3DUSAGE_SHARED_KEYED_MUTEX) && sharing_option("WINE_ROUVY_NV12_SHARED"))
+                    || wined3d_shared_legacy_resource(r))
             && r->access == WINED3D_RESOURCE_ACCESS_GPU
             && r->bind_flags == WINED3D_BIND_SHADER_RESOURCE
             && texture_from_resource(r)->level_count == 1 && texture_from_resource(r)->layer_count == 1;
@@ -109,7 +135,7 @@ bool wined3d_shared_vk_create_image(struct wined3d_texture_vk *t,
     struct wined3d_shared_vk *s = t->shared;
     VkResult vr;
 
-    if (!shared_resource_supported(&t->t.resource) || !vk_info->vk_ops.vkGetMemoryWin32HandleKHR
+    if (!wined3d_shared_vk_resource_supported(&t->t.resource) || !vk_info->vk_ops.vkGetMemoryWin32HandleKHR
             || !vk_info->vk_ops.vkGetPhysicalDeviceImageFormatProperties2)
         return false;
     /* Do not silently replace an exported allocation after an unload. */
@@ -241,7 +267,7 @@ HRESULT CDECL wined3d_resource_get_shared_handle(struct wined3d_resource *r, HAN
     HRESULT hr;
     if (!handle) return E_INVALIDARG;
     *handle = NULL;
-    if (!shared_resource_supported(r)) return E_NOTIMPL;
+    if (!wined3d_shared_vk_resource_supported(r)) return E_NOTIMPL;
     t = wined3d_texture_vk(texture_from_resource(r));
     wined3d_mutex_lock();
     hr = run_shared_operation(t, 0);
@@ -266,13 +292,14 @@ HRESULT CDECL wined3d_resource_import_shared(struct wined3d_resource *r, HANDLE 
     struct wined3d_shared_vk *s;
     struct wined3d_texture_vk *t;
     HRESULT hr = E_INVALIDARG;
-    if (!shared_resource_supported(r)) return E_NOTIMPL;
+    if (!wined3d_shared_vk_resource_supported(r)) return E_NOTIMPL;
     t = wined3d_texture_vk(texture_from_resource(r));
     wined3d_mutex_lock();
     AcquireSRWLockExclusive(&shared_lock);
     if (!t->shared && !(t->t.flags & WINED3D_TEXTURE_RGB_ALLOCATED) && (s = find_shared(handle))
             && IsEqualGUID(&s->device_uuid, &r->device->adapter->device_uuid)
-            && r->width == s->desc.width && r->height == s->desc.height)
+            && r->width == s->desc.width && r->height == s->desc.height
+            && (r->usage & WINED3DUSAGE_SHARED_KEYED_MUTEX) == (s->desc.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX))
     {
         ++s->refs;
         t->shared = s;
@@ -325,7 +352,7 @@ HRESULT CDECL wined3d_resource_release_shared(struct wined3d_resource *r, UINT64
     struct wined3d_texture_vk *t;
     struct wined3d_shared_vk *s;
     HRESULT hr;
-    if (!shared_resource_supported(r)) return E_NOTIMPL;
+    if (!wined3d_shared_vk_resource_supported(r)) return E_NOTIMPL;
     t = wined3d_texture_vk(texture_from_resource(r));
     if (!(s = t->shared)) return DXGI_ERROR_INVALID_CALL;
     wined3d_mutex_lock();
@@ -341,4 +368,79 @@ HRESULT CDECL wined3d_resource_release_shared(struct wined3d_resource *r, UINT64
     ReleaseSRWLockExclusive(&shared_lock);
     wined3d_mutex_unlock();
     return hr;
+}
+
+/* Legacy sharing has no client mutex. Serialize complete commands across all
+ * participating CS threads, and return ownership to EXTERNAL before unlocking.
+ * This lock is never taken by an API thread waiting for its CS. */
+static SRWLOCK legacy_access_lock = SRWLOCK_INIT;
+
+bool wined3d_shared_access_begin(struct wined3d_shared_access *a)
+{
+    struct wined3d_texture_vk *t;
+    struct shared_operation op;
+    unsigned int i, j, acquired = 0;
+
+    if (!a->count) return true;
+    AcquireSRWLockExclusive(&legacy_access_lock);
+    for (i = 0; i < a->count; ++i)
+    {
+        t = wined3d_texture_vk(texture_from_resource(a->resources[i]));
+        op.texture = t;
+        op.operation = 0;
+        shared_operation_cs(&op);
+        if (FAILED(op.hr) || !t->shared || t->shared->abandoned) goto fail;
+        /* Distinct aliases of one allocation in the same command need a more
+         * general aliasing model. The two NV12 plane views use the same t. */
+        for (j = 0; j < i; ++j)
+            if (wined3d_texture_vk(texture_from_resource(a->resources[j]))->shared == t->shared)
+                goto fail;
+    }
+    for (i = 0; i < a->count; ++i)
+    {
+        op.texture = wined3d_texture_vk(texture_from_resource(a->resources[i]));
+        op.operation = 1;
+        shared_operation_cs(&op);
+        if (FAILED(op.hr)) goto fail;
+        ++acquired;
+    }
+    return true;
+fail:
+    ERR("Cannot acquire legacy NV12 resources for %s; command rejected.\n", a->operation);
+    while (acquired)
+    {
+        op.texture = wined3d_texture_vk(texture_from_resource(a->resources[--acquired]));
+        op.operation = 2;
+        shared_operation_cs(&op);
+    }
+    ReleaseSRWLockExclusive(&legacy_access_lock);
+    return false;
+}
+
+void wined3d_shared_access_end(struct wined3d_shared_access *a)
+{
+    struct wined3d_texture_vk *t;
+    struct wined3d_shared_vk *s;
+    struct shared_operation op;
+    unsigned int i;
+
+    if (!a->count) return;
+    for (i = a->count; i; --i)
+    {
+        t = wined3d_texture_vk(texture_from_resource(a->resources[i - 1]));
+        s = t->shared;
+        op.texture = t;
+        op.operation = 2;
+        shared_operation_cs(&op);
+        if (FAILED(op.hr))
+        {
+            AcquireSRWLockExclusive(&shared_lock);
+            s->abandoned = true;
+            ReleaseSRWLockExclusive(&shared_lock);
+            ERR("Cannot release legacy NV12 resource %p after %s.\n", s->handle, a->operation);
+            continue;
+        }
+
+    }
+    ReleaseSRWLockExclusive(&legacy_access_lock);
 }

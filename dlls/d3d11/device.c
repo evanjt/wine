@@ -4629,7 +4629,8 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_OpenSharedResource(ID3D11Device5 *
     desc.Format = DXGI_FORMAT_NV12;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    desc.MiscFlags = shared_desc.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX
+            ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED;
     if (FAILED(hr = d3d_texture2d_create(device, &desc, NULL, NULL, &texture))) return hr;
     hr = wined3d_resource_import_shared(wined3d_texture_get_resource(texture->wined3d_texture), resource);
     if (SUCCEEDED(hr)) hr = ID3D11Texture2D_QueryInterface(&texture->ID3D11Texture2D_iface, iid, out);
