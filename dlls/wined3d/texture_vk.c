@@ -868,7 +868,18 @@ BOOL wined3d_texture_vk_prepare_texture(struct wined3d_texture_vk *texture_vk,
     desc.samples = max(1, wined3d_resource_get_sample_count(resource));
     desc.mipLevels = texture_vk->t.level_count;
     desc.arrayLayers = texture_vk->t.layer_count;
-    if (!wined3d_context_vk_create_image(context_vk, &desc, &texture_vk->image))
+    if ((resource->usage & WINED3DUSAGE_SHARED_KEYED_MUTEX) && wined3d_shared_vk_enabled())
+    {
+        texture_vk->layout = VK_IMAGE_LAYOUT_GENERAL;
+        if (!wined3d_shared_vk_create_image(texture_vk, context_vk, &desc))
+            return FALSE;
+        if (texture_vk->shared_import)
+        {
+            texture_vk->t.flags |= WINED3D_TEXTURE_RGB_ALLOCATED;
+            return TRUE;
+        }
+    }
+    else if (!wined3d_context_vk_create_image(context_vk, &desc, &texture_vk->image))
         return FALSE;
 
     /* We can't use a zero src access mask without synchronization2. Set the last-used bind mask to something
@@ -889,6 +900,8 @@ BOOL wined3d_texture_vk_prepare_texture(struct wined3d_texture_vk *texture_vk,
             texture_vk->image.vk_image, &vk_range);
 
     texture_vk->t.flags |= WINED3D_TEXTURE_RGB_ALLOCATED;
+    if (texture_vk->shared)
+        wined3d_shared_vk_initial_release(texture_vk, context_vk);
 
     TRACE("Created image 0x%s, memory 0x%s for texture %p.\n",
             wine_dbgstr_longlong(texture_vk->image.vk_image), wine_dbgstr_longlong(texture_vk->image.vk_memory), texture_vk);
