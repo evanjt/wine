@@ -1381,6 +1381,15 @@ static void adapter_vk_destroy_texture(struct wined3d_texture *texture)
     wined3d_texture_sub_resources_destroyed(texture);
     texture->resource.parent_ops->wined3d_object_destroyed(texture->resource.parent);
 
+    /* Remove export metadata before its last VkDeviceMemory can be retired.
+     * Import holds the wined3d mutex through allocation, so it cannot race this
+     * final detach. Drain pending initialization before inspecting shared. */
+    if (texture->resource.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX)
+    {
+        if (GetCurrentThreadId() != device->cs->thread_id)
+            wined3d_cs_finish(device->cs, WINED3D_CS_QUEUE_DEFAULT);
+        wined3d_shared_vk_detach(texture_vk);
+    }
     wined3d_texture_cleanup(&texture_vk->t);
     wined3d_cs_destroy_object(device->cs, free, texture_vk);
 
@@ -2087,6 +2096,7 @@ static BOOL wined3d_init_vulkan(struct wined3d_vk_info *vk_info)
 #define MAP_INSTANCE_FUNCTION(core_pfn, ext_pfn) \
     if (!vk_ops->core_pfn) \
         vk_ops->core_pfn = (void *)VK_CALL(vkGetInstanceProcAddr(instance, #ext_pfn));
+    MAP_INSTANCE_FUNCTION(vkGetPhysicalDeviceImageFormatProperties2, vkGetPhysicalDeviceImageFormatProperties2KHR)
     MAP_INSTANCE_FUNCTION(vkGetPhysicalDeviceProperties2, vkGetPhysicalDeviceProperties2KHR)
     MAP_INSTANCE_FUNCTION(vkGetPhysicalDeviceFeatures2, vkGetPhysicalDeviceFeatures2KHR)
 #undef MAP_INSTANCE_FUNCTION

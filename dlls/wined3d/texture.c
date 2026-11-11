@@ -1071,6 +1071,11 @@ static void texture_resource_unload(struct wined3d_resource *resource)
 
     TRACE("resource %p.\n", resource);
 
+    /* An exported allocation must remain stable while any local owner lives.
+     * Destruction (ref == 0) still retires the image and memory normally. */
+    if (resource->ref && wined3d_shared_vk_resource_pinned(resource))
+        return;
+
     /* D3D is not initialised, so no GPU locations should currently exist.
      * Moreover, we may not be able to acquire a valid context. */
     if (!device->d3d_initialized)

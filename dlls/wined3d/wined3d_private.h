@@ -3268,6 +3268,8 @@ struct wined3d_resource_ops
     HRESULT (*resource_sub_resource_unmap)(struct wined3d_resource *resource, unsigned int sub_resource_idx);
 };
 
+bool wined3d_shared_vk_resource_pinned(struct wined3d_resource *resource);
+
 struct wined3d_resource
 {
     LONG ref;

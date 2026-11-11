@@ -28,6 +28,7 @@ SOURCES = \
 	resource.c \
 	resource.rc \
 	sampler.c \
+	shared_vk.c \
 	shader.c \
 	shader_sm1.c \
 	shader_sm4.c \
