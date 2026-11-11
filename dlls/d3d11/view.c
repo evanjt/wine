@@ -2201,7 +2201,16 @@ static HRESULT d3d_shader_resource_view_init(struct d3d_shader_resource_view *vi
 {
     struct wined3d_resource *wined3d_resource;
     struct wined3d_view_desc wined3d_desc;
+    ID3D11Device *owner;
     HRESULT hr;
+
+    ID3D11Resource_GetDevice(resource, &owner);
+    ID3D11Device_Release(owner);
+    if (owner != (ID3D11Device *)&device->ID3D11Device5_iface)
+    {
+        WARN("Resource %p belongs to a different device.\n", resource);
+        return E_INVALIDARG;
+    }
 
     view->ID3D11ShaderResourceView_iface.lpVtbl = &d3d11_shader_resource_view_vtbl;
     view->ID3D10ShaderResourceView1_iface.lpVtbl = &d3d10_shader_resource_view_vtbl;
@@ -2237,6 +2246,7 @@ static HRESULT d3d_shader_resource_view_init(struct d3d_shader_resource_view *vi
         WARN("Failed to create wined3d shader resource view, hr %#lx.\n", hr);
         return hr;
     }
+
 
     wined3d_private_store_init(&view->private_store);
     wined3d_mutex_unlock();
