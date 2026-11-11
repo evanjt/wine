@@ -868,7 +868,7 @@ BOOL wined3d_texture_vk_prepare_texture(struct wined3d_texture_vk *texture_vk,
     desc.samples = max(1, wined3d_resource_get_sample_count(resource));
     desc.mipLevels = texture_vk->t.level_count;
     desc.arrayLayers = texture_vk->t.layer_count;
-    if ((resource->usage & WINED3DUSAGE_SHARED_KEYED_MUTEX) && wined3d_shared_vk_enabled())
+    if (wined3d_shared_vk_resource_supported(resource))
     {
         texture_vk->layout = VK_IMAGE_LAYOUT_GENERAL;
         if (!wined3d_shared_vk_create_image(texture_vk, context_vk, &desc))

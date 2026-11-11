@@ -1002,6 +1002,7 @@ static inline struct wined3d_texture_vk *wined3d_texture_vk(struct wined3d_textu
 }
 
 bool wined3d_shared_vk_enabled(void);
+bool wined3d_shared_vk_resource_supported(struct wined3d_resource *resource);
 bool wined3d_shared_vk_create_image(struct wined3d_texture_vk *texture,
         struct wined3d_context_vk *context, const VkImageCreateInfo *desc);
 void wined3d_shared_vk_detach(void *object);
