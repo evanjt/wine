@@ -1774,16 +1774,24 @@ HRESULT CDECL wined3d_decoder_end_frame(struct wined3d_decoder *decoder)
 HRESULT CDECL wined3d_decoder_decode(struct wined3d_decoder *decoder,
         unsigned int bitstream_size, unsigned int slice_control_size)
 {
+    HRESULT hr = S_OK;
+
     TRACE("decoder %p, bitstream_size %u, slice_control_size %u.\n", decoder, bitstream_size, slice_control_size);
 
+    /* Decoder submissions share the immediate command stream with resource
+     * creation and context operations, including synchronous CS callbacks. */
+    wined3d_mutex_lock();
     if (!decoder->output_view)
     {
         ERR("Not in frame.\n");
-        return E_INVALIDARG;
+        hr = E_INVALIDARG;
     }
-
-    wined3d_cs_emit_decode(decoder, decoder->output_view, bitstream_size, slice_control_size);
-    return S_OK;
+    else
+    {
+        wined3d_cs_emit_decode(decoder, decoder->output_view, bitstream_size, slice_control_size);
+    }
+    wined3d_mutex_unlock();
+    return hr;
 }
 
 HRESULT CDECL wined3d_decoder_extension(struct wined3d_decoder *decoder, unsigned int function,
