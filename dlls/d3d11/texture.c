@@ -973,6 +973,21 @@ HRESULT d3d_texture2d_create(struct d3d_device *device, const D3D11_TEXTURE2D_DE
         return E_INVALIDARG;
     }
 
+    /* Keep the first external-memory implementation deliberately narrow.
+     * In particular, initialization must happen after AcquireSync, not through
+     * the deferred initial-data upload path. */
+    {
+        char enabled[2];
+        if ((desc->MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                && GetEnvironmentVariableA("WINE_ROUVY_NV12_SHARED", enabled, sizeof(enabled)) == 1
+                && enabled[0] == '1'
+                && (desc->Format != DXGI_FORMAT_NV12 || desc->MipLevels != 1 || desc->ArraySize != 1
+                || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality
+                || desc->BindFlags != D3D11_BIND_SHADER_RESOURCE || desc->Usage != D3D11_USAGE_DEFAULT
+                || desc->CPUAccessFlags || desc->MiscFlags != D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX || data))
+            return E_NOTIMPL;
+    }
+
     if (!(texture = calloc(1, sizeof(*texture))))
         return E_OUTOFMEMORY;
 
