@@ -54,6 +54,20 @@ static HRESULT STDMETHODCALLTYPE dxgi_resource_inner_QueryInterface(IUnknown *if
         return S_OK;
     }
 
+    if (!is_subresource && IsEqualGUID(riid, &IID_IDXGIKeyedMutex))
+    {
+        struct wined3d_resource_desc desc;
+        char enabled[2];
+        wined3d_resource_get_desc(resource->wined3d_resource, &desc);
+        if (desc.format == WINED3DFMT_NV12_PLANAR && (desc.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX)
+                && GetEnvironmentVariableA("WINE_ROUVY_NV12_SHARED", enabled, sizeof(enabled)) == 1 && enabled[0] == '1')
+        {
+            *out = &resource->IDXGIKeyedMutex_iface;
+            IDXGIResource1_AddRef(&resource->IDXGIResource1_iface);
+            return S_OK;
+        }
+    }
+
     WARN("%s not implemented, returning E_NOINTERFACE\n", debugstr_guid(riid));
 
     *out = NULL;
@@ -385,9 +399,8 @@ static HRESULT STDMETHODCALLTYPE dxgi_resource_GetDevice(IDXGIResource1 *iface, 
 /* IDXGIResource methods */
 static HRESULT STDMETHODCALLTYPE dxgi_resource_GetSharedHandle(IDXGIResource1 *iface, HANDLE *shared_handle)
 {
-    FIXME("iface %p, shared_handle %p stub!\n", iface, shared_handle);
-
-    return E_NOTIMPL;
+    struct dxgi_resource *resource = impl_from_IDXGIResource1(iface);
+    return wined3d_resource_get_shared_handle(resource->wined3d_resource, shared_handle);
 }
 
 static HRESULT STDMETHODCALLTYPE dxgi_resource_GetUsage(IDXGIResource1 *iface, DXGI_USAGE *usage)
@@ -507,6 +520,83 @@ static const struct IDXGIResource1Vtbl dxgi_resource_vtbl =
     dxgi_resource_CreateSharedHandle,
 };
 
+static inline struct dxgi_resource *impl_from_IDXGIKeyedMutex(IDXGIKeyedMutex *iface)
+{
+    return CONTAINING_RECORD(iface, struct dxgi_resource, IDXGIKeyedMutex_iface);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_QueryInterface(IDXGIKeyedMutex *iface, REFIID iid, void **out)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_QueryInterface(&r->IDXGIResource1_iface, iid, out);
+}
+
+static ULONG STDMETHODCALLTYPE dxgi_keyed_AddRef(IDXGIKeyedMutex *iface)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_AddRef(&r->IDXGIResource1_iface);
+}
+
+static ULONG STDMETHODCALLTYPE dxgi_keyed_Release(IDXGIKeyedMutex *iface)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_Release(&r->IDXGIResource1_iface);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_SetPrivateData(IDXGIKeyedMutex *iface, REFGUID guid, UINT size, const void *data)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_SetPrivateData(&r->IDXGIResource1_iface, guid, size, data);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_SetPrivateDataInterface(IDXGIKeyedMutex *iface, REFGUID guid, const IUnknown *data)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_SetPrivateDataInterface(&r->IDXGIResource1_iface, guid, data);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_GetPrivateData(IDXGIKeyedMutex *iface, REFGUID guid, UINT *size, void *data)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_GetPrivateData(&r->IDXGIResource1_iface, guid, size, data);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_GetParent(IDXGIKeyedMutex *iface, REFIID iid, void **out)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_GetParent(&r->IDXGIResource1_iface, iid, out);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_GetDevice(IDXGIKeyedMutex *iface, REFIID iid, void **out)
+{
+    struct dxgi_resource *r = impl_from_IDXGIKeyedMutex(iface);
+    return IDXGIResource1_GetDevice(&r->IDXGIResource1_iface, iid, out);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_AcquireSync(IDXGIKeyedMutex *iface, UINT64 key, DWORD timeout)
+{
+    return wined3d_resource_acquire_shared(impl_from_IDXGIKeyedMutex(iface)->wined3d_resource, key, timeout);
+}
+
+static HRESULT STDMETHODCALLTYPE dxgi_keyed_ReleaseSync(IDXGIKeyedMutex *iface, UINT64 key)
+{
+    return wined3d_resource_release_shared(impl_from_IDXGIKeyedMutex(iface)->wined3d_resource, key);
+}
+
+static const struct IDXGIKeyedMutexVtbl dxgi_keyed_vtbl =
+{
+    dxgi_keyed_QueryInterface,
+    dxgi_keyed_AddRef,
+    dxgi_keyed_Release,
+    dxgi_keyed_SetPrivateData,
+    dxgi_keyed_SetPrivateDataInterface,
+    dxgi_keyed_GetPrivateData,
+    dxgi_keyed_GetParent,
+    dxgi_keyed_GetDevice,
+    dxgi_keyed_AcquireSync,
+    dxgi_keyed_ReleaseSync,
+};
+
 static const struct IUnknownVtbl dxgi_resource_inner_unknown_vtbl =
 {
     /* IUnknown methods */
@@ -532,6 +622,7 @@ HRESULT dxgi_resource_init(struct dxgi_resource *resource, IDXGIDevice *device,
     else
         resource->IDXGISurface2_iface.lpVtbl = NULL;
     resource->IDXGIResource1_iface.lpVtbl = &dxgi_resource_vtbl;
+    resource->IDXGIKeyedMutex_iface.lpVtbl = &dxgi_keyed_vtbl;
     resource->IUnknown_iface.lpVtbl = &dxgi_resource_inner_unknown_vtbl;
     resource->refcount = 1;
     wined3d_private_store_init(&resource->private_store);

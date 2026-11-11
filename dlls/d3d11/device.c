@@ -4613,9 +4613,28 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateDeferredContext(ID3D11Device
 static HRESULT STDMETHODCALLTYPE d3d11_device_OpenSharedResource(ID3D11Device5 *iface, HANDLE resource, REFIID iid,
         void **out)
 {
-    FIXME("iface %p, resource %p, iid %s, out %p stub!\n", iface, resource, debugstr_guid(iid), out);
+    struct d3d_device *device = impl_from_ID3D11Device5(iface);
+    struct wined3d_resource_desc shared_desc;
+    D3D11_TEXTURE2D_DESC desc = {0};
+    struct d3d_texture2d *texture;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    if (!out) return E_INVALIDARG;
+    *out = NULL;
+    if (!resource) return E_INVALIDARG;
+    if (FAILED(hr = wined3d_shared_get_desc(resource, &shared_desc))) return hr;
+    desc.Width = shared_desc.width;
+    desc.Height = shared_desc.height;
+    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    if (FAILED(hr = d3d_texture2d_create(device, &desc, NULL, NULL, &texture))) return hr;
+    hr = wined3d_resource_import_shared(wined3d_texture_get_resource(texture->wined3d_texture), resource);
+    if (SUCCEEDED(hr)) hr = ID3D11Texture2D_QueryInterface(&texture->ID3D11Texture2D_iface, iid, out);
+    ID3D11Texture2D_Release(&texture->ID3D11Texture2D_iface);
+    return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *iface, DXGI_FORMAT format,
