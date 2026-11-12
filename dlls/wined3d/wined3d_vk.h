@@ -47,6 +47,7 @@ struct wined3d_device_vk;
     /* Vulkan 1.1 */ \
     VK_INSTANCE_EXT_PFN(vkGetPhysicalDeviceFeatures2) \
     VK_INSTANCE_EXT_PFN(vkGetPhysicalDeviceProperties2) \
+    VK_INSTANCE_EXT_PFN(vkGetPhysicalDeviceImageFormatProperties2) \
     /* VK_KHR_surface */ \
     VK_INSTANCE_PFN(vkDestroySurfaceKHR) \
     VK_INSTANCE_PFN(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) \
@@ -61,6 +62,7 @@ struct wined3d_device_vk;
     VK_INSTANCE_EXT_PFN(vkResetQueryPoolEXT)
 
 #define VK_DEVICE_FUNCS() \
+    VK_DEVICE_EXT_PFN(vkGetMemoryWin32HandleKHR) \
     VK_DEVICE_PFN(vkAllocateCommandBuffers) \
     VK_DEVICE_PFN(vkAllocateDescriptorSets) \
     VK_DEVICE_PFN(vkAllocateMemory) \
@@ -986,6 +988,8 @@ struct wined3d_texture_vk
     struct wined3d_texture t;
 
     struct wined3d_image_vk image;
+    struct wined3d_shared_vk *shared;
+    bool shared_import;
     enum VkImageLayout layout;
     uint32_t bind_mask;
 
@@ -997,6 +1001,12 @@ static inline struct wined3d_texture_vk *wined3d_texture_vk(struct wined3d_textu
     return CONTAINING_RECORD(texture, struct wined3d_texture_vk, t);
 }
 
+bool wined3d_shared_vk_enabled(void);
+bool wined3d_shared_vk_resource_supported(struct wined3d_resource *resource);
+bool wined3d_shared_vk_create_image(struct wined3d_texture_vk *texture,
+        struct wined3d_context_vk *context, const VkImageCreateInfo *desc);
+void wined3d_shared_vk_detach(void *object);
+void wined3d_shared_vk_initial_release(struct wined3d_texture_vk *texture, struct wined3d_context_vk *context);
 void wined3d_texture_vk_barrier(struct wined3d_texture_vk *texture_vk,
         struct wined3d_context_vk *context_vk, uint32_t bind_mask);
 const VkDescriptorImageInfo *wined3d_texture_vk_get_default_image_info(struct wined3d_texture_vk *texture_vk,

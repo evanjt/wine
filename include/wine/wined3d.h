@@ -2755,6 +2755,14 @@ ULONG __cdecl wined3d_rasterizer_state_decref(struct wined3d_rasterizer_state *s
 void * __cdecl wined3d_rasterizer_state_get_parent(const struct wined3d_rasterizer_state *state);
 ULONG __cdecl wined3d_rasterizer_state_incref(struct wined3d_rasterizer_state *state);
 
+
+/* Experimental, process-local NV12 sharing with keyed or command-scoped synchronization. */
+HRESULT __cdecl wined3d_resource_get_shared_handle(struct wined3d_resource *resource, HANDLE *handle);
+HRESULT __cdecl wined3d_shared_get_desc(HANDLE handle, struct wined3d_resource_desc *desc);
+HRESULT __cdecl wined3d_resource_import_shared(struct wined3d_resource *resource, HANDLE handle);
+HRESULT __cdecl wined3d_resource_acquire_shared(struct wined3d_resource *resource, UINT64 key, DWORD timeout);
+HRESULT __cdecl wined3d_resource_release_shared(struct wined3d_resource *resource, UINT64 key);
+
 void __cdecl wined3d_resource_get_desc(const struct wined3d_resource *resource,
         struct wined3d_resource_desc *desc);
 void * __cdecl wined3d_resource_get_parent(const struct wined3d_resource *resource);

@@ -406,3 +406,9 @@
 @ cdecl vkd3d_shader_scan(ptr ptr)
 @ cdecl vkd3d_shader_serialize_dxbc(long ptr ptr ptr)
 @ cdecl vkd3d_shader_serialize_root_signature(ptr ptr ptr)
+
+@ cdecl wined3d_resource_get_shared_handle(ptr ptr)
+@ cdecl wined3d_shared_get_desc(ptr ptr)
+@ cdecl wined3d_resource_import_shared(ptr ptr)
+@ cdecl wined3d_resource_acquire_shared(ptr int64 long)
+@ cdecl wined3d_resource_release_shared(ptr int64)

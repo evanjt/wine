@@ -973,6 +973,24 @@ HRESULT d3d_texture2d_create(struct d3d_device *device, const D3D11_TEXTURE2D_DE
         return E_INVALIDARG;
     }
 
+    /* Opt-in external-memory sharing only supports complete NV12 frames. */
+    {
+        char keyed[2], legacy[2];
+        BOOL keyed_enabled = GetEnvironmentVariableA("WINE_ROUVY_NV12_SHARED", keyed, sizeof(keyed)) == 1 && keyed[0] == '1';
+        BOOL legacy_enabled = GetEnvironmentVariableA("WINE_ROUVY_NV12_LEGACY", legacy, sizeof(legacy)) == 1 && legacy[0] == '1';
+        UINT sharing = desc->MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX);
+        if (((sharing & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) && keyed_enabled)
+                || ((sharing & D3D11_RESOURCE_MISC_SHARED) && legacy_enabled))
+        {
+            if (desc->Format != DXGI_FORMAT_NV12 || desc->MipLevels != 1 || desc->ArraySize != 1
+                    || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality
+                    || desc->BindFlags != D3D11_BIND_SHADER_RESOURCE || desc->Usage != D3D11_USAGE_DEFAULT
+                    || desc->CPUAccessFlags || desc->MiscFlags != sharing || data
+                    || (desc->Width & 1) || (desc->Height & 1))
+                return E_NOTIMPL;
+        }
+    }
+
     if (!(texture = calloc(1, sizeof(*texture))))
         return E_OUTOFMEMORY;
 

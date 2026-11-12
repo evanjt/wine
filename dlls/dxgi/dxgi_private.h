@@ -202,6 +202,7 @@ struct dxgi_resource
 {
     IDXGISurface2 IDXGISurface2_iface;
     IDXGIResource1 IDXGIResource1_iface;
+    IDXGIKeyedMutex IDXGIKeyedMutex_iface;
     IUnknown IUnknown_iface;
     IUnknown *outer_unknown;
     LONG refcount;

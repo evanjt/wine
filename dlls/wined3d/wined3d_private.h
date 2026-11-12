@@ -3268,6 +3268,19 @@ struct wined3d_resource_ops
     HRESULT (*resource_sub_resource_unmap)(struct wined3d_resource *resource, unsigned int sub_resource_idx);
 };
 
+bool wined3d_shared_vk_resource_pinned(struct wined3d_resource *resource);
+bool wined3d_shared_legacy_enabled(void);
+bool wined3d_shared_legacy_resource(const struct wined3d_resource *resource);
+/* One complete command is the atomic publication/consumption unit. */
+struct wined3d_shared_access
+{
+    struct wined3d_resource *resources[16];
+    unsigned int count;
+    const char *operation;
+};
+bool wined3d_shared_access_begin(struct wined3d_shared_access *access);
+void wined3d_shared_access_end(struct wined3d_shared_access *access);
+
 struct wined3d_resource
 {
     LONG ref;
@@ -3689,6 +3702,7 @@ struct wined3d_device_context
     const struct wined3d_device_context_ops *ops;
     struct wined3d_device *device;
     struct wined3d_state *state;
+    bool legacy_shared_pending;
 };
 
 struct wined3d_cs

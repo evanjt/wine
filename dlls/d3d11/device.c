@@ -18,6 +18,8 @@
  */
 
 #include "d3d11_private.h"
+/* Without initguid.h this only declares the GUIDs; decoder.c defines them. */
+#include "dxva.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d11);
 
@@ -4611,9 +4613,29 @@ static HRESULT STDMETHODCALLTYPE d3d11_device_CreateDeferredContext(ID3D11Device
 static HRESULT STDMETHODCALLTYPE d3d11_device_OpenSharedResource(ID3D11Device5 *iface, HANDLE resource, REFIID iid,
         void **out)
 {
-    FIXME("iface %p, resource %p, iid %s, out %p stub!\n", iface, resource, debugstr_guid(iid), out);
+    struct d3d_device *device = impl_from_ID3D11Device5(iface);
+    struct wined3d_resource_desc shared_desc;
+    D3D11_TEXTURE2D_DESC desc = {0};
+    struct d3d_texture2d *texture;
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    if (!out) return E_INVALIDARG;
+    *out = NULL;
+    if (!resource) return E_INVALIDARG;
+    if (FAILED(hr = wined3d_shared_get_desc(resource, &shared_desc))) return hr;
+    desc.Width = shared_desc.width;
+    desc.Height = shared_desc.height;
+    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = shared_desc.usage & WINED3DUSAGE_SHARED_KEYED_MUTEX
+            ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : D3D11_RESOURCE_MISC_SHARED;
+    if (FAILED(hr = d3d_texture2d_create(device, &desc, NULL, NULL, &texture))) return hr;
+    hr = wined3d_resource_import_shared(wined3d_texture_get_resource(texture->wined3d_texture), resource);
+    if (SUCCEEDED(hr)) hr = ID3D11Texture2D_QueryInterface(&texture->ID3D11Texture2D_iface, iid, out);
+    ID3D11Texture2D_Release(&texture->ID3D11Texture2D_iface);
+    return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_device_CheckFormatSupport(ID3D11Device5 *iface, DXGI_FORMAT format,
@@ -7866,22 +7888,105 @@ static HRESULT STDMETHODCALLTYPE d3d11_video_device_GetVideoDecoderProfile(
 static HRESULT STDMETHODCALLTYPE d3d11_video_device_CheckVideoDecoderFormat(
         ID3D11VideoDevice1 *iface, const GUID *profile, DXGI_FORMAT format, BOOL *supported)
 {
-    FIXME("iface %p, profile %s, format %#x, supported %p, stub!\n", iface, debugstr_guid(profile), format, supported);
-    return E_NOTIMPL;
+    struct d3d_device *device = impl_from_ID3D11VideoDevice1(iface);
+    unsigned int count, i;
+    GUID supported_profile;
+
+    TRACE("iface %p, profile %s, format %#x, supported %p.\n",
+            iface, debugstr_guid(profile), format, supported);
+
+    if (!profile || !supported)
+        return E_INVALIDARG;
+
+    *supported = FALSE;
+
+    /* wined3d's Vulkan decoder only produces NV12 output for now. */
+    if (format != DXGI_FORMAT_NV12)
+        return S_OK;
+
+    count = wined3d_device_get_video_decode_profile_count(device->wined3d_device);
+    for (i = 0; i < count; ++i)
+    {
+        if (FAILED(wined3d_device_get_video_decode_profile(device->wined3d_device, i, &supported_profile)))
+            continue;
+
+        if (IsEqualGUID(&supported_profile, profile))
+        {
+            *supported = TRUE;
+            break;
+        }
+    }
+
+    TRACE("Returning supported %d for profile %s.\n", *supported, debugstr_guid(profile));
+
+    return S_OK;
+}
+
+/* Bitstream formats wined3d's decoders can consume, most preferred first.
+ * For H.264 DXVA defines ConfigBitstreamRaw 1 as long-form slice control and
+ * 2 as short-form; the HEVC specification defines only the short form, as 1. */
+static unsigned int d3d11_get_decoder_configs(const GUID *profile, UINT *raw_modes)
+{
+    if (IsEqualGUID(profile, &DXVA_ModeH264_VLD_NoFGT))
+    {
+        raw_modes[0] = 2;
+        raw_modes[1] = 1;
+        return 2;
+    }
+
+    if (IsEqualGUID(profile, &DXVA_ModeHEVC_VLD_Main))
+    {
+        raw_modes[0] = 1;
+        return 1;
+    }
+
+    return 0;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_video_device_GetVideoDecoderConfigCount(ID3D11VideoDevice1 *iface,
         const D3D11_VIDEO_DECODER_DESC *desc, UINT *count)
 {
-    FIXME("iface %p, desc %p, count %p, stub!\n", iface, desc, count);
-    return E_NOTIMPL;
+    UINT raw_modes[2];
+
+    TRACE("iface %p, desc %p, count %p.\n", iface, desc, count);
+
+    if (!desc || !count)
+        return E_INVALIDARG;
+
+    *count = d3d11_get_decoder_configs(&desc->Guid, raw_modes);
+    if (!*count)
+        WARN("No configurations for profile %s.\n", debugstr_guid(&desc->Guid));
+
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_video_device_GetVideoDecoderConfig(ID3D11VideoDevice1 *iface,
         const D3D11_VIDEO_DECODER_DESC *desc, UINT index, D3D11_VIDEO_DECODER_CONFIG *config)
 {
-    FIXME("iface %p, desc %p, index %u, config %p, stub!\n", iface, desc, index, config);
-    return E_NOTIMPL;
+    UINT raw_modes[2];
+    unsigned int count;
+
+    TRACE("iface %p, desc %p, index %u, config %p.\n", iface, desc, index, config);
+
+    if (!desc || !config)
+        return E_INVALIDARG;
+
+    count = d3d11_get_decoder_configs(&desc->Guid, raw_modes);
+    if (index >= count)
+        return E_INVALIDARG;
+
+    memset(config, 0, sizeof(*config));
+    /* We only support unencrypted bitstreams. */
+    config->guidConfigBitstreamEncryption = DXVA_NoEncrypt;
+    config->guidConfigMBcontrolEncryption = DXVA_NoEncrypt;
+    config->guidConfigResidDiffEncryption = DXVA_NoEncrypt;
+    config->ConfigBitstreamRaw = raw_modes[index];
+    /* Bitstream (VLD) decoding only; no host-side residual difference or
+     * macroblock control data is used. */
+    config->ConfigResidDiffAccelerator = 0;
+    config->ConfigMinRenderTargetBuffCount = 1;
+
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d3d11_video_device_GetContentProtectionCaps(ID3D11VideoDevice1 *iface,
