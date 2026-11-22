@@ -1579,6 +1579,7 @@ fi
 WINE_NOTICE_WITH(usb,[test "$ac_cv_func_libusb_interrupt_event_handler" != "yes"],
                  [libusb-1.0 ${notice_platform}development files not found (or too old), USB devices won't be supported.],
                  [enable_wineusb_sys])
+test "$ac_cv_func_libusb_interrupt_event_handler" = "yes" || enable_libusb0=${enable_libusb0:-no}
 
 dnl **** Check for libv4l2 ****
 if test "x$with_v4l2" != "xno"
@@ -2860,6 +2861,7 @@ WINE_CONFIG_MAKEFILE(dlls/ksuser)
 WINE_CONFIG_MAKEFILE(dlls/ktmw32)
 WINE_CONFIG_MAKEFILE(dlls/l3codeca.acm)
 WINE_CONFIG_MAKEFILE(dlls/l3codecx.ax)
+WINE_CONFIG_MAKEFILE(dlls/libusb0)
 WINE_CONFIG_MAKEFILE(dlls/loadperf)
 WINE_CONFIG_MAKEFILE(dlls/localspl)
 WINE_CONFIG_MAKEFILE(dlls/localspl/tests)
