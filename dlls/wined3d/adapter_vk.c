@@ -2660,6 +2660,16 @@ fail_vulkan:
     return FALSE;
 }
 
+bool wined3d_adapter_vk_is_software(struct wined3d_adapter *adapter)
+{
+    struct wined3d_adapter_vk *adapter_vk = wined3d_adapter_vk(adapter);
+    const struct wined3d_vk_info *vk_info = &adapter_vk->vk_info;
+    VkPhysicalDeviceProperties properties;
+
+    VK_CALL(vkGetPhysicalDeviceProperties(adapter_vk->physical_device, &properties));
+    return properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+}
+
 struct wined3d_adapter *wined3d_adapter_vk_create(unsigned int ordinal,
         unsigned int wined3d_creation_flags)
 {

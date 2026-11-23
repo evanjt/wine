@@ -2632,6 +2632,7 @@ BOOL wined3d_adapter_init(struct wined3d_adapter *adapter, unsigned int ordinal,
 void wined3d_adapter_cleanup(struct wined3d_adapter *adapter);
 BOOL wined3d_get_primary_adapter_luid(LUID *luid);
 
+bool wined3d_adapter_vk_is_software(struct wined3d_adapter *adapter);
 struct wined3d_adapter *wined3d_adapter_vk_create(unsigned int ordinal,
         unsigned int wined3d_creation_flags);
 

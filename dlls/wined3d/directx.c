@@ -3489,7 +3489,20 @@ static struct wined3d_adapter *wined3d_adapter_create(unsigned int ordinal, DWOR
         return wined3d_adapter_no3d_create(ordinal, wined3d_creation_flags);
 
     if (wined3d_settings.renderer == WINED3D_RENDERER_VULKAN)
-        return wined3d_adapter_vk_create(ordinal, wined3d_creation_flags);
+    {
+        struct wined3d_adapter *adapter;
+
+        if ((adapter = wined3d_adapter_vk_create(ordinal, wined3d_creation_flags)))
+        {
+            if (!wined3d_adapter_vk_is_software(adapter)
+                    && adapter->d3d_info.feature_level >= WINED3D_FEATURE_LEVEL_11)
+                return adapter;
+            adapter->adapter_ops->adapter_destroy(adapter);
+        }
+        /* Every later renderer check has to see the adapter that was created. */
+        ERR_(winediag)("No capable Vulkan device, using the OpenGL renderer.\n");
+        wined3d_settings.renderer = WINED3D_RENDERER_OPENGL;
+    }
 
     return wined3d_adapter_gl_create(ordinal, wined3d_creation_flags);
 }
