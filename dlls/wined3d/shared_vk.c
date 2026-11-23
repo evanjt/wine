@@ -31,15 +31,7 @@ static bool sharing_option(const char *name)
 
 bool wined3d_shared_legacy_enabled(void)
 {
-    /* Like renderer selection, this experimental option is fixed per process. */
-    static LONG enabled = -1;
-    LONG value = InterlockedCompareExchange(&enabled, -1, -1);
-    if (value == -1)
-    {
-        value = sharing_option("WINE_ROUVY_NV12_LEGACY");
-        InterlockedCompareExchange(&enabled, value, -1);
-    }
-    return value && wined3d_get_renderer() == WINED3D_RENDERER_VULKAN;
+    return wined3d_get_renderer() == WINED3D_RENDERER_VULKAN;
 }
 
 bool wined3d_shared_vk_enabled(void)
