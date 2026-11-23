@@ -1,0 +1,8 @@
+MODULE    = libusb0.dll
+UNIXLIB   = libusb0.so
+UNIX_LIBS    = $(USB_LIBS)
+UNIX_CFLAGS  = $(USB_CFLAGS)
+
+SOURCES = \
+	main.c \
+	unixlib.c
